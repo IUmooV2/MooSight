@@ -6,6 +6,7 @@ from spiderfoot.security import (
     redact_headers,
     redact_mapping,
     redact_proxy,
+    redact_text,
     redact_url,
 )
 
@@ -59,3 +60,27 @@ class TestSecurityRedaction(unittest.TestCase):
         result = redact_mapping({"api_token": "abc", "timeout": 30})
         self.assertEqual(result["api_token"], "[REDACTED]")
         self.assertEqual(result["timeout"], 30)
+
+    def test_redact_text_scrubs_bearer_tokens_and_assignments(self):
+        value = redact_text(
+            "Authorization: Bearer abc.def.ghi password=hunter2 token=xyz timeout=5"
+        )
+        self.assertNotIn("abc.def.ghi", value)
+        self.assertNotIn("hunter2", value)
+        self.assertNotIn("xyz", value)
+        self.assertIn("timeout=5", value)
+
+    def test_redact_text_scrubs_sensitive_url_query_values(self):
+        value = redact_text(
+            "GET https://example.com/api?api_key=secret123&q=public"
+        )
+        self.assertNotIn("secret123", value)
+        self.assertIn("q=public", value)
+
+    def test_redact_text_scrubs_proxy_userinfo(self):
+        value = redact_text(
+            "proxy=socks5://alice:password123@127.0.0.1:9050"
+        )
+        self.assertNotIn("alice", value)
+        self.assertNotIn("password123", value)
+        self.assertIn("127.0.0.1:9050", value)
