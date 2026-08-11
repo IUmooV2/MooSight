@@ -2,8 +2,9 @@
 """Core networking primitives for MooSight.
 
 This module is intentionally small and side-effect free. It provides a typed
-result model, a session factory, and narrowly scoped request/TLS behavior that
-can be adopted incrementally by legacy SpiderFoot networking code.
+result model, an isolated session factory, and narrowly scoped request/TLS
+behavior that can be adopted incrementally by legacy SpiderFoot networking
+code.
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from spiderfoot.security import redact_url
 
@@ -70,9 +73,40 @@ class ScopedInsecureRequestWarnings:
         return self._catcher.__exit__(exc_type, exc_value, traceback)
 
 
-def build_session(proxy_url: str | None = None) -> requests.Session:
-    """Create an isolated Requests session without changing global state."""
+def build_session(
+    proxy_url: str | None = None,
+    *,
+    retries: int = 2,
+    backoff_factor: float = 0.25,
+    retry_statuses: Sequence[int] = (429, 500, 502, 503, 504),
+) -> requests.Session:
+    """Create an isolated Requests session with a conservative retry policy.
+
+    Retries are bounded and use urllib3's default idempotent-method policy, so
+    ordinary POST requests are not retried automatically. ``Retry-After`` is
+    respected when a remote service supplies it.
+    """
+    if not isinstance(retries, int) or retries < 0:
+        raise ValueError("retries must be a non-negative integer")
+    if backoff_factor < 0:
+        raise ValueError("backoff_factor must be non-negative")
+
+    retry_policy = Retry(
+        total=retries,
+        connect=retries,
+        read=retries,
+        status=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=tuple(retry_statuses),
+        raise_on_status=False,
+        respect_retry_after_header=True,
+    )
+    adapter = HTTPAdapter(max_retries=retry_policy)
+
     session = requests.Session()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
     if proxy_url:
         session.proxies.update({
             "http": proxy_url,
@@ -130,8 +164,8 @@ def request_url(
 
     This adapter intentionally returns a normalized result instead of raising
     routine network exceptions. Unexpected programming errors are represented
-    as ``INDETERMINATE`` with a sanitized message so callers can distinguish
-    them from a definitive negative finding.
+    as ``INDETERMINATE`` with a sanitized URL so callers can distinguish them
+    from a definitive negative finding.
     """
     if not isinstance(session, requests.Session):
         raise TypeError("session must be a requests.Session")
@@ -141,6 +175,8 @@ def request_url(
     method = str(method).upper().strip()
     if method not in {"GET", "HEAD", "POST"}:
         raise ValueError(f"unsupported HTTP method: {method}")
+    if size_limit is not None and size_limit < 0:
+        raise ValueError("size_limit must be non-negative")
 
     safe_url = redact_url(url.strip())
     warning_context = nullcontext() if verify else ScopedInsecureRequestWarnings()
@@ -176,12 +212,9 @@ def request_url(
     content = response.content
     state = classify_http_status(response.status_code)
 
-    if size_limit is not None:
-        if size_limit < 0:
-            raise ValueError("size_limit must be non-negative")
-        if len(content) > size_limit:
-            content = None
-            state = NetworkState.INVALID_RESPONSE
+    if size_limit is not None and len(content) > size_limit:
+        content = None
+        state = NetworkState.INVALID_RESPONSE
 
     return NetworkResult(
         state=state,
