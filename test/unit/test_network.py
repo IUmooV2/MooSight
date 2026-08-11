@@ -61,6 +61,34 @@ class TestNetworkPrimitives(unittest.TestCase):
         build_session()
         self.assertIs(ssl._create_default_https_context, before)
 
+    def test_build_session_uses_bounded_retry_policy(self):
+        session = build_session(retries=3, backoff_factor=0.5)
+        retries = session.get_adapter("https://").max_retries
+
+        self.assertEqual(retries.total, 3)
+        self.assertEqual(retries.connect, 3)
+        self.assertEqual(retries.read, 3)
+        self.assertEqual(retries.status, 3)
+        self.assertEqual(retries.backoff_factor, 0.5)
+        self.assertTrue(retries.respect_retry_after_header)
+        self.assertIn(429, retries.status_forcelist)
+        self.assertIn(503, retries.status_forcelist)
+
+    def test_build_session_does_not_retry_post_by_default(self):
+        session = build_session()
+        retries = session.get_adapter("https://").max_retries
+        allowed_methods = {method.upper() for method in retries.allowed_methods}
+
+        self.assertIn("GET", allowed_methods)
+        self.assertIn("HEAD", allowed_methods)
+        self.assertNotIn("POST", allowed_methods)
+
+    def test_build_session_rejects_invalid_retry_configuration(self):
+        with self.assertRaises(ValueError):
+            build_session(retries=-1)
+        with self.assertRaises(ValueError):
+            build_session(backoff_factor=-0.1)
+
     def test_insecure_warning_suppression_is_scoped(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -140,6 +168,12 @@ class TestNetworkPrimitives(unittest.TestCase):
         result = request_url(session, "GET", "https://example.com/", size_limit=4)
         self.assertEqual(result.state, NetworkState.INVALID_RESPONSE)
         self.assertIsNone(result.content)
+
+    def test_request_url_rejects_negative_size_limit_before_request(self):
+        session = self._mock_session_response()
+        with self.assertRaises(ValueError):
+            request_url(session, "GET", "https://example.com/", size_limit=-1)
+        session.request.assert_not_called()
 
     def test_request_url_rejects_unsupported_method(self):
         session = requests.Session()
