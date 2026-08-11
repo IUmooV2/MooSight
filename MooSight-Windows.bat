@@ -11,10 +11,24 @@ echo This will set up everything MooSight needs and start it.
 echo The first run can take several minutes.
 echo.
 
+REM --- Validate that this launcher is inside a complete MooSight checkout ---
+if not exist "sf.py" (
+  echo MooSight cannot start because sf.py is missing.
+  echo Download/extract the complete MooSight repository, not only this BAT file.
+  pause
+  exit /b 1
+)
+if not exist "requirements.txt" (
+  echo MooSight cannot start because requirements.txt is missing.
+  echo Download/extract the complete MooSight repository, not only this BAT file.
+  pause
+  exit /b 1
+)
+
 REM --- Find Python 3.10, or install it automatically with Windows Package Manager ---
 py -3.10 --version >nul 2>&1
 if errorlevel 1 (
-  echo [1/4] Python 3.10 is not installed. Installing it automatically...
+  echo [1/5] Python 3.10 is not installed. Installing it automatically...
   where winget >nul 2>&1
   if errorlevel 1 (
     echo.
@@ -29,7 +43,6 @@ if errorlevel 1 (
   winget install --id Python.Python.3.10 -e --source winget --accept-package-agreements --accept-source-agreements
   if errorlevel 1 goto :pythonfail
 
-  REM Refresh common Python Launcher location for this process.
   if exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" set "PATH=%LOCALAPPDATA%\Programs\Python\Launcher;%PATH%"
 )
 
@@ -42,23 +55,33 @@ if errorlevel 1 (
   exit /b 0
 )
 
-echo [2/4] Python is ready.
+echo [2/5] Python is ready.
 
 REM --- Create isolated environment ---
 if not exist ".venv\Scripts\python.exe" (
-  echo [3/4] Preparing MooSight for the first time...
+  echo [3/5] Preparing MooSight for the first time...
   py -3.10 -m venv .venv
   if errorlevel 1 goto :fail
 
-  ".venv\Scripts\python.exe" -m pip install --upgrade pip
+  ".venv\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel
   if errorlevel 1 goto :fail
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
   if errorlevel 1 goto :fail
 ) else (
-  echo [3/4] MooSight is already prepared.
+  echo [3/5] MooSight environment already exists.
 )
 
-echo [4/4] Starting MooSight...
+echo [4/5] Checking installed Python dependencies...
+".venv\Scripts\python.exe" -m pip check
+if errorlevel 1 (
+  echo.
+  echo MooSight found incompatible or missing Python packages.
+  echo Delete the .venv folder and run this launcher again to rebuild it cleanly.
+  pause
+  exit /b 1
+)
+
+echo [5/5] Starting MooSight...
 echo.
 echo Your browser will open automatically.
 echo Keep this window open while using MooSight.
