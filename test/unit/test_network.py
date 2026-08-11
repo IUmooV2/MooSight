@@ -1,6 +1,7 @@
 import ssl
 import unittest
 import warnings
+from unittest.mock import Mock
 
 import requests
 import urllib3
@@ -12,6 +13,7 @@ from spiderfoot.network import (
     build_session,
     classify_exception,
     classify_http_status,
+    request_url,
 )
 
 
@@ -71,3 +73,75 @@ class TestNetworkPrimitives(unittest.TestCase):
         self.assertIn("before", messages)
         self.assertNotIn("inside", messages)
         self.assertIn("after", messages)
+
+    def _mock_session_response(self, status=200, content=b"ok", url="https://example.com/"):
+        session = requests.Session()
+        response = Mock()
+        response.status_code = status
+        response.content = content
+        response.url = url
+        response.headers = {"Content-Type": "text/plain"}
+        session.request = Mock(return_value=response)
+        return session
+
+    def test_request_url_verifies_tls_by_default(self):
+        session = self._mock_session_response()
+        result = request_url(session, "GET", "https://example.com/")
+
+        self.assertEqual(result.state, NetworkState.SUCCESS)
+        self.assertTrue(result.tls_verified)
+        self.assertEqual(result.content, b"ok")
+        self.assertTrue(session.request.call_args.kwargs["verify"])
+
+    def test_request_url_allows_explicit_unverified_request_without_global_tls_mutation(self):
+        session = self._mock_session_response()
+        before = ssl._create_default_https_context
+
+        result = request_url(session, "GET", "https://example.com/", verify=False)
+
+        self.assertEqual(result.state, NetworkState.SUCCESS)
+        self.assertFalse(result.tls_verified)
+        self.assertFalse(session.request.call_args.kwargs["verify"])
+        self.assertIs(ssl._create_default_https_context, before)
+
+    def test_request_url_distinguishes_timeout_from_not_found(self):
+        session = requests.Session()
+        session.request = Mock(side_effect=requests.exceptions.Timeout("slow"))
+
+        result = request_url(session, "GET", "https://example.com/")
+
+        self.assertEqual(result.state, NetworkState.TIMEOUT)
+        self.assertNotEqual(result.state, NetworkState.NOT_FOUND)
+
+    def test_request_url_redacts_credentials_from_returned_url(self):
+        session = requests.Session()
+        session.request = Mock(side_effect=requests.exceptions.ConnectionError("offline"))
+
+        result = request_url(
+            session,
+            "GET",
+            "https://alice:secret@example.com/api?token=abc123&query=safe",
+        )
+
+        self.assertEqual(result.state, NetworkState.NETWORK_ERROR)
+        self.assertNotIn("alice", result.url)
+        self.assertNotIn("secret", result.url)
+        self.assertNotIn("abc123", result.url)
+        self.assertIn("query=safe", result.url)
+
+    def test_request_url_classifies_rate_limit(self):
+        session = self._mock_session_response(status=429, content=b"slow down")
+        result = request_url(session, "GET", "https://example.com/")
+        self.assertEqual(result.state, NetworkState.RATE_LIMITED)
+        self.assertEqual(result.status_code, 429)
+
+    def test_request_url_marks_oversized_response_invalid(self):
+        session = self._mock_session_response(content=b"0123456789")
+        result = request_url(session, "GET", "https://example.com/", size_limit=4)
+        self.assertEqual(result.state, NetworkState.INVALID_RESPONSE)
+        self.assertIsNone(result.content)
+
+    def test_request_url_rejects_unsupported_method(self):
+        session = requests.Session()
+        with self.assertRaises(ValueError):
+            request_url(session, "TRACE", "https://example.com/")
