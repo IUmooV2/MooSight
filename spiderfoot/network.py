@@ -2,19 +2,22 @@
 """Core networking primitives for MooSight.
 
 This module is intentionally small and side-effect free. It provides a typed
-result model, a session factory, and a narrowly scoped TLS-warning context that
+result model, a session factory, and narrowly scoped request/TLS behavior that
 can be adopted incrementally by legacy SpiderFoot networking code.
 """
 
 from __future__ import annotations
 
 import warnings
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Optional
 
 import requests
 import urllib3
+
+from spiderfoot.security import redact_url
 
 
 class NetworkState(str, Enum):
@@ -34,7 +37,7 @@ class NetworkState(str, Enum):
 
 @dataclass(frozen=True)
 class NetworkResult:
-    """Normalized result returned by future MooSight network adapters."""
+    """Normalized result returned by MooSight network adapters."""
 
     state: NetworkState
     status_code: Optional[int] = None
@@ -108,3 +111,83 @@ def classify_exception(exc: BaseException) -> NetworkState:
     if isinstance(exc, requests.exceptions.RequestException):
         return NetworkState.NETWORK_ERROR
     return NetworkState.INDETERMINATE
+
+
+def request_url(
+    session: requests.Session,
+    method: str,
+    url: str,
+    *,
+    timeout: float | tuple[float, float] = 30,
+    verify: bool = True,
+    headers: Mapping[str, str] | None = None,
+    cookies=None,
+    data=None,
+    allow_redirects: bool = True,
+    size_limit: int | None = None,
+) -> NetworkResult:
+    """Perform one HTTP request without altering process-wide TLS behavior.
+
+    This adapter intentionally returns a normalized result instead of raising
+    routine network exceptions. Unexpected programming errors are represented
+    as ``INDETERMINATE`` with a sanitized message so callers can distinguish
+    them from a definitive negative finding.
+    """
+    if not isinstance(session, requests.Session):
+        raise TypeError("session must be a requests.Session")
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url must be a non-empty string")
+
+    method = str(method).upper().strip()
+    if method not in {"GET", "HEAD", "POST"}:
+        raise ValueError(f"unsupported HTTP method: {method}")
+
+    safe_url = redact_url(url.strip())
+    warning_context = nullcontext() if verify else ScopedInsecureRequestWarnings()
+
+    try:
+        with warning_context:
+            response = session.request(
+                method,
+                url.strip(),
+                timeout=timeout,
+                verify=verify,
+                headers=dict(headers or {}),
+                cookies=cookies,
+                data=data,
+                allow_redirects=allow_redirects,
+            )
+    except requests.exceptions.RequestException as exc:
+        return NetworkResult(
+            state=classify_exception(exc),
+            url=safe_url,
+            error=str(exc),
+            tls_verified=verify,
+        )
+    except Exception as exc:
+        return NetworkResult(
+            state=NetworkState.INDETERMINATE,
+            url=safe_url,
+            error=f"{type(exc).__name__}: {exc}",
+            tls_verified=verify,
+        )
+
+    headers_out = {str(k).lower(): str(v) for k, v in response.headers.items()}
+    content = response.content
+    state = classify_http_status(response.status_code)
+
+    if size_limit is not None:
+        if size_limit < 0:
+            raise ValueError("size_limit must be non-negative")
+        if len(content) > size_limit:
+            content = None
+            state = NetworkState.INVALID_RESPONSE
+
+    return NetworkResult(
+        state=state,
+        status_code=response.status_code,
+        url=redact_url(response.url or url),
+        content=content,
+        headers=headers_out,
+        tls_verified=verify,
+    )
