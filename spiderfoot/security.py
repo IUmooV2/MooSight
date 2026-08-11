@@ -39,6 +39,13 @@ _SENSITIVE_NAMES = {
 
 
 _BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?P<name>access_token|api[-_]?key|apikey|authorization|cookie|password|passwd|pass|secret|sessionid|token)"
+    r"(?P<separator>\s*[:=]\s*)"
+    r"(?P<value>[^\s,;&\)\]]+)"
+)
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_PROXY_RE = re.compile(r"(?i)\b(?:socks4a?|socks5h?|https?)://[^\s,\)]+")
 
 
 def is_sensitive_name(name: Any) -> bool:
@@ -156,3 +163,32 @@ def redact_mapping(values: Mapping | None) -> dict:
     for key, value in values.items():
         result[key] = _REDACTED if is_sensitive_name(key) else value
     return result
+
+
+def redact_text(message: Any) -> str:
+    """Return a defensively redacted representation of arbitrary log text.
+
+    This is a final safety net for messages emitted by legacy modules that may
+    interpolate credentials directly. New code should still redact structured
+    values before formatting them into a log message.
+    """
+    if message is None:
+        return "None"
+
+    text = str(message)
+    text = _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", text)
+
+    # Scrub complete URLs first so query parameters and URL userinfo are handled
+    # using URL-aware parsing rather than only regular expressions.
+    text = _URL_RE.sub(lambda m: redact_url(m.group(0)), text)
+
+    # Proxy URLs may use SOCKS schemes, which are outside _URL_RE.
+    text = _PROXY_RE.sub(lambda m: redact_proxy(m.group(0)), text)
+
+    # Catch key=value or Header: value strings from legacy modules. This runs
+    # after URL processing so it does not interfere with URL reconstruction.
+    text = _SENSITIVE_ASSIGNMENT_RE.sub(
+        lambda m: f"{m.group('name')}{m.group('separator')}{_REDACTED}",
+        text,
+    )
+    return text
