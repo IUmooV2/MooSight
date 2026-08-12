@@ -4,7 +4,7 @@
 This transitional subclass keeps the legacy scanner orchestration while making
 scan-owned mutable collections instance-local. It also ensures the module list
 passed by a caller cannot be mutated through scanner internals and prevents
-scanner construction from permanently changing process-wide DNS resolution.
+custom DNS setup from remaining process-wide while a scan executes.
 """
 
 from __future__ import annotations
@@ -28,9 +28,11 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
     """Legacy scanner behavior with isolated per-scan mutable state.
 
     The legacy scanner may ask dnspython to replace process-wide socket resolver
-    functions when a custom DNS server is configured. MooSight restores the
-    exact resolver functions present before construction so a scanner cannot
-    leave the parent process globally modified after initialization completes.
+    functions when a custom DNS server is configured. MooSight forces legacy
+    initialization to complete without starting the scan, restores the process
+    resolver state, and only then starts scanning when requested. This keeps a
+    custom scanner DNS setting from leaking across the entire application while
+    the scan is running.
     """
 
     def __init__(
@@ -61,6 +63,10 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
         }
 
         try:
+            # Always suppress legacy auto-start here. The old initializer changes
+            # process-wide DNS resolver functions before reaching its start hook.
+            # We restore those globals first and invoke the already-initialized
+            # scanner afterward when the caller actually requested auto-start.
             super().__init__(
                 scanName,
                 scanId,
@@ -68,7 +74,7 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
                 targetType,
                 owned_modules,
                 globalOpts,
-                start=start,
+                start=False,
             )
         finally:
             # The legacy scanner calls dns.resolver.override_system_resolver().
@@ -76,3 +82,6 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
             # including when initialization raises.
             for name, function in previous_socket_functions.items():
                 setattr(socket, name, function)
+
+        if start:
+            self._SpiderFootScanner__startScan()
