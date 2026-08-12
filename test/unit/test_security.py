@@ -84,3 +84,22 @@ class TestSecurityRedaction(unittest.TestCase):
         self.assertNotIn("alice", value)
         self.assertNotIn("password123", value)
         self.assertIn("127.0.0.1:9050", value)
+
+    def test_malformed_proxy_port_fails_closed_without_raising(self):
+        value = redact_proxy("socks5://alice:secret@127.0.0.1:notaport")
+        self.assertEqual(value, "[REDACTED]")
+        self.assertNotIn("alice", value)
+        self.assertNotIn("secret", value)
+
+    def test_malformed_http_port_fails_closed_without_raising(self):
+        value = redact_url("https://alice:secret@example.com:notaport/?token=abc")
+        self.assertEqual(value, "[REDACTED]")
+        self.assertNotIn("alice", value)
+        self.assertNotIn("secret", value)
+        self.assertNotIn("abc", value)
+
+    def test_redact_text_survives_malformed_proxy_urls(self):
+        value = redact_text("Using proxy: socks5://alice:secret@127.0.0.1:notaport")
+        self.assertIn("[REDACTED]", value)
+        self.assertNotIn("alice", value)
+        self.assertNotIn("secret", value)
