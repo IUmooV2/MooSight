@@ -1,3 +1,4 @@
+import socket
 import ssl
 import unittest
 from unittest.mock import Mock, patch
@@ -47,6 +48,27 @@ class TestModernSpiderFootCore(unittest.TestCase):
         core = ModernSpiderFoot(self._options())
         try:
             self.assertIs(ssl._create_default_https_context, before)
+        finally:
+            core.close()
+
+    def test_construction_restores_process_socket_resolver_functions(self):
+        names = (
+            "getaddrinfo",
+            "getnameinfo",
+            "getfqdn",
+            "gethostbyname",
+            "gethostbyname_ex",
+            "gethostbyaddr",
+        )
+        before = {name: getattr(socket, name) for name in names if hasattr(socket, name)}
+        options = self._options()
+        options["_dnsserver"] = "1.1.1.1"
+
+        core = ModernSpiderFoot(options)
+        try:
+            for name, function in before.items():
+                with self.subTest(name=name):
+                    self.assertIs(getattr(socket, name), function)
         finally:
             core.close()
 
