@@ -70,8 +70,18 @@ class TestModuleAccounts(unittest.TestCase):
             'name': 'Instagram', 'cat': 'social', 'e_code': 200, 'm_code': 200,
             'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}, 'https://instagram.com/alice')
         self.assertIn('Confidence: HIGH', text)
+        self.assertIn('Site reliability: NEW (no history)', text)
         self.assertIn('identity/ownership is not established', text)
         self.assertIn('<SFURL>https://instagram.com/alice</SFURL>', text)
+
+    def test_result_text_includes_historical_site_reliability(self):
+        text = sfp_accounts._result_text({
+            'name': 'Instagram', 'cat': 'social', 'e_code': 200, 'm_code': 200,
+            'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'},
+            'https://instagram.com/alice',
+            {'positive': 8, 'negative': 20, 'ambiguous': 1, 'error': 0})
+        self.assertIn('Site reliability: HEALTHY', text)
+        self.assertIn('29 observations', text)
 
     def _module_for_site_check(self, response):
         module = sfp_accounts()
@@ -80,9 +90,11 @@ class TestModuleAccounts(unittest.TestCase):
         module.lock = __import__('threading').Lock()
         module.siteResults = {}
         module.siteHealth = {}
+        module.aggregateHealth = {}
         module.opts = {
             '_fetchtimeout': 5, '_useragent': 'MooSight-Test',
             'musthavename': True, 'allow_insecure_tls': False,
+            '_maxthreads': 1,
         }
         return module
 
@@ -172,3 +184,26 @@ class TestModuleAccounts(unittest.TestCase):
             'e_code': 200, 'm_code': 404, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
         module.checkSite('alice', site)
         self.assertTrue(any(module.siteResults.values()))
+
+    def test_check_sites_persists_username_free_health_history(self):
+        module = self._module_for_site_check({
+            'content': 'PROFILE EXISTS', 'code': '200', 'headers': {'content-type': 'text/plain'}})
+        site = {
+            'name': 'Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
+
+        results = module.checkSites('alice', [site])
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(module.aggregateHealth['Example']['positive'], 1)
+        cache_args = module.sf.cachePut.call_args.args
+        self.assertEqual(cache_args[0], module._HEALTH_CACHE_KEY)
+        self.assertNotIn('alice', cache_args[1])
+
+    def test_random_false_positive_penalty_is_ambiguous_not_positive(self):
+        module = self._module_for_site_check(None)
+        module._penalize_random_false_positive('Always Exists')
+        record = module.aggregateHealth['Always Exists']
+        self.assertEqual(record['positive'], 0)
+        self.assertEqual(record['ambiguous'], 1)
+        self.assertIn('randomized control', record['last_detail'])
