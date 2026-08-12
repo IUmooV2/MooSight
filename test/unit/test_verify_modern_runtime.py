@@ -6,6 +6,7 @@ import sf
 import sfscan
 
 from spiderfoot.modern_core import ModernSpiderFoot
+from spiderfoot.modern_scanner import ModernSpiderFootScanner
 from tools.verify_modern_runtime import verify_runtime
 
 
@@ -37,12 +38,19 @@ class TestModernRuntimeVerifier(unittest.TestCase):
                 self.assertIs(getattr(socket, name), function)
         self.assertIs(sf.SpiderFoot, ModernSpiderFoot)
         self.assertIs(sfscan.SpiderFoot, ModernSpiderFoot)
+        self.assertIs(sfscan.SpiderFootScanner, ModernSpiderFootScanner)
 
     def test_runtime_verifier_includes_global_resolver_check(self):
         checks = verify_runtime()
         by_name = {check.name: check for check in checks}
         self.assertIn("global DNS resolver preservation", by_name)
         self.assertTrue(by_name["global DNS resolver preservation"].ok)
+
+    def test_runtime_verifier_includes_scanner_facade_check(self):
+        checks = verify_runtime()
+        by_name = {check.name: check for check in checks}
+        self.assertIn("scanner facade routing", by_name)
+        self.assertTrue(by_name["scanner facade routing"].ok)
 
     def test_check_names_are_unique(self):
         checks = verify_runtime()
