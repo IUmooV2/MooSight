@@ -50,6 +50,45 @@ class TestHttpClient(unittest.TestCase):
         self.assertEqual(kwargs["data"], "a=1")
         client.close()
 
+    @patch("spiderfoot.http_client.build_session")
+    @patch("spiderfoot.http_client.request_with_config")
+    def test_local_target_bypasses_configured_proxy(self, request_mock, build_session):
+        request_mock.return_value = NetworkResult(NetworkState.SUCCESS, status_code=200)
+        direct_session = Mock()
+        build_session.return_value = direct_session
+        client = HttpClient(NetworkConfig(proxy_type="5", proxy_host="proxy.example", proxy_port=1080))
+
+        client.get("http://127.0.0.1:5001/")
+
+        self.assertIs(request_mock.call_args.kwargs["session"], direct_session)
+        direct_session.close.assert_called_once_with()
+        client.close()
+
+    @patch("spiderfoot.http_client.build_session")
+    @patch("spiderfoot.http_client.request_with_config")
+    def test_public_target_keeps_configured_proxy_session(self, request_mock, build_session):
+        request_mock.return_value = NetworkResult(NetworkState.SUCCESS, status_code=200)
+        client = HttpClient(NetworkConfig(proxy_type="5", proxy_host="proxy.example", proxy_port=1080))
+
+        client.get("https://example.com/")
+
+        build_session.assert_not_called()
+        self.assertIs(request_mock.call_args.kwargs["session"], client.session)
+        client.close()
+
+    @patch("spiderfoot.http_client.build_session")
+    @patch("spiderfoot.http_client.request_with_config", side_effect=RuntimeError("boom"))
+    def test_direct_session_closes_when_request_raises(self, request_mock, build_session):
+        direct_session = Mock()
+        build_session.return_value = direct_session
+        client = HttpClient(NetworkConfig(proxy_type="5", proxy_host="proxy.example", proxy_port=1080))
+
+        with self.assertRaises(RuntimeError):
+            client.get("http://localhost/")
+
+        direct_session.close.assert_called_once_with()
+        client.close()
+
     @patch("spiderfoot.http_client.to_legacy_result")
     @patch("spiderfoot.http_client.request_with_config")
     def test_request_legacy_uses_normalized_result_as_source_of_truth(self, request_mock, legacy_mock):
