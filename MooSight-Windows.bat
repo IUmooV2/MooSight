@@ -34,7 +34,7 @@ if not exist "requirements.txt" (
 REM --- Find Python 3.10, or install it automatically with Windows Package Manager ---
 py -3.10 --version >nul 2>&1
 if errorlevel 1 (
-  echo [1/9] Python 3.10 is not installed. Installing it automatically...
+  echo [1/10] Python 3.10 is not installed. Installing it automatically...
   where winget >nul 2>&1
   if errorlevel 1 (
     echo.
@@ -61,11 +61,11 @@ if errorlevel 1 (
   exit /b 0
 )
 
-echo [2/9] Python is ready.
+echo [2/10] Python is ready.
 
 REM --- Create isolated environment ---
 if not exist ".venv\Scripts\python.exe" (
-  echo [3/9] Preparing MooSight for the first time...
+  echo [3/10] Preparing MooSight for the first time...
   py -3.10 -m venv .venv
   if errorlevel 1 goto :fail
 
@@ -74,10 +74,10 @@ if not exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
   if errorlevel 1 goto :fail
 ) else (
-  echo [3/9] MooSight environment already exists.
+  echo [3/10] MooSight environment already exists.
 )
 
-echo [4/9] Checking installed Python dependencies...
+echo [4/10] Checking installed Python dependencies...
 ".venv\Scripts\python.exe" -m pip check
 if errorlevel 1 (
   echo.
@@ -87,7 +87,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [5/9] Running MooSight preflight checks...
+echo [5/10] Running MooSight preflight checks...
 ".venv\Scripts\python.exe" tools\preflight.py --host 127.0.0.1 --port 5001
 if errorlevel 1 (
   echo.
@@ -97,7 +97,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [6/9] Enforcing modern exception-handling policy...
+echo [6/10] Enforcing modern exception-handling policy...
 ".venv\Scripts\python.exe" tools\verify_exception_policy.py
 if errorlevel 1 (
   echo.
@@ -108,7 +108,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [7/9] Enforcing modern security policy...
+echo [7/10] Enforcing modern security policy...
 ".venv\Scripts\python.exe" tools\verify_modern_security.py
 if errorlevel 1 (
   echo.
@@ -119,7 +119,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [8/9] Verifying modern core security and routing...
+echo [8/10] Verifying legacy exception containment...
+".venv\Scripts\python.exe" tools\verify_legacy_exception_containment.py
+if errorlevel 1 (
+  echo.
+  echo MooSight found a legacy method with unsafe exception handling still reachable at runtime.
+  echo Review the FAIL line above before starting the application.
+  pause
+  exit /b 1
+)
+
+echo [9/10] Verifying modern core security and routing...
 ".venv\Scripts\python.exe" tools\verify_modern_runtime.py
 if errorlevel 1 (
   echo.
@@ -130,7 +140,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [9/9] Starting MooSight with the modern core...
+echo [10/10] Starting MooSight with the modern core...
 echo.
 echo Your browser will open automatically.
 echo Keep this window open while using MooSight.
