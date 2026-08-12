@@ -18,6 +18,7 @@ from queue import Queue
 from urllib.parse import urlparse
 
 from spiderfoot import SpiderFootEvent, SpiderFootHelpers, SpiderFootPlugin
+from spiderfoot.account_health import dumps_health, loads_health, merge_health, reliability_text
 
 
 class sfp_accounts(SpiderFootPlugin):
@@ -55,10 +56,14 @@ class sfp_accounts(SpiderFootPlugin):
     reportedUsers = list()
     siteResults = dict()
     siteHealth = dict()
+    aggregateHealth = dict()
     sites = list()
     errorState = False
     distrustedChecked = False
     lock = None
+
+    _HEALTH_CACHE_KEY = "sfaccounts_health_v1"
+    _HEALTH_CACHE_HOURS = 24 * 365
 
     def setup(self, sfc, userOpts=dict()):
         self.sf = sfc
@@ -67,6 +72,7 @@ class sfp_accounts(SpiderFootPlugin):
         self.reportedUsers = list()
         self.siteResults = dict()
         self.siteHealth = dict()
+        self.aggregateHealth = dict()
         self.sites = list()
         self.errorState = False
         self.distrustedChecked = False
@@ -79,6 +85,10 @@ class sfp_accounts(SpiderFootPlugin):
 
         self.commonNames = SpiderFootHelpers.humanNamesFromWordlists()
         self.words = SpiderFootHelpers.dictionaryWordsFromWordlists()
+
+        self.aggregateHealth = loads_health(
+            self.sf.cacheGet(self._HEALTH_CACHE_KEY, self._HEALTH_CACHE_HOURS)
+        )
 
         content = self.sf.cacheGet("sfaccountsv3", 12)
         if content is None:
@@ -155,12 +165,13 @@ class sfp_accounts(SpiderFootPlugin):
         return "LOW", "HTTP response and username-presence heuristic matched"
 
     @staticmethod
-    def _result_text(site, ret_url):
+    def _result_text(site, ret_url, health_record=None):
         confidence, evidence = sfp_accounts._confidence(site)
         return (
             f"{site['name']} (Category: {site.get('cat', 'unknown')})\n"
             f"Confidence: {confidence}\n"
             f"Evidence: {evidence}\n"
+            f"Site reliability: {reliability_text(health_record)}\n"
             "Interpretation: username appears to exist on this service; identity/ownership is not established.\n"
             f"<SFURL>{ret_url}</SFURL>"
         )
@@ -186,6 +197,27 @@ class sfp_accounts(SpiderFootPlugin):
             self.siteResults[retname] = found
         self._record_site_health(site, status, detail)
 
+    def _persist_site_health(self):
+        """Merge this check's username-free health statistics into local history."""
+        self.aggregateHealth = merge_health(self.aggregateHealth, self.siteHealth)
+        try:
+            self.sf.cachePut(self._HEALTH_CACHE_KEY, dumps_health(self.aggregateHealth))
+        except (OSError, TypeError, ValueError) as exc:
+            self.debug(f"Unable to persist Account Finder site health: {exc}")
+
+    def _penalize_random_false_positive(self, site_name):
+        """Record a random-control match as unreliable behavior, not success."""
+        current = {
+            site_name: {
+                'positive': 0,
+                'negative': 0,
+                'ambiguous': 1,
+                'error': 0,
+                'last_detail': 'matched randomized control username',
+            }
+        }
+        self.aggregateHealth = merge_health(self.aggregateHealth, current)
+
     def checkSite(self, name, site):
         name = self._normalize_username(name)
         if not name:
@@ -202,7 +234,7 @@ class sfp_accounts(SpiderFootPlugin):
             self._record_site_health(site, 'error', 'invalid or unsupported check URL')
             return
 
-        retname = self._result_text(site, ret_url)
+        retname = self._result_text(site, ret_url, self.aggregateHealth.get(str(site.get('name') or '')))
         post = self._format_site_value(site.get('post_body'), name)
         headers = {
             str(key): self._format_site_value(value, name)
@@ -268,7 +300,7 @@ class sfp_accounts(SpiderFootPlugin):
 
         self._set_site_result(retname, True, site, 'positive')
 
-    def checkSites(self, username, sites=None):
+    def checkSites(self, username, sites=None, persist_health=True):
         username = self._normalize_username(username)
         if not username:
             return []
@@ -317,7 +349,10 @@ class sfp_accounts(SpiderFootPlugin):
             f"ambiguous={health_counts['ambiguous']}, errors={health_counts['error']}, "
             f"duration={duration:.2f}, rate={len(sites) / duration:.0f}"
         )
-        return sorted([site for site, found in self.siteResults.items() if found])
+        positives = sorted([site for site, found in self.siteResults.items() if found])
+        if persist_health:
+            self._persist_site_health()
+        return positives
 
     def generatePermutations(self, username):
         permutations = set()
@@ -351,15 +386,17 @@ class sfp_accounts(SpiderFootPlugin):
             else:
                 randpool = 'abcdefghijklmnopqrstuvwxyz1234567890'
                 randuser = ''.join(random.SystemRandom().choice(randpool) for _ in range(14))
-                res = self.checkSites(randuser)
+                res = self.checkSites(randuser, persist_health=False)
                 if res:
                     distrusted = []
                     for site in res:
                         sitename = site.split(" (Category:")[0]
                         self.debug(f"Distrusting {sitename}: it matched a random username.")
                         distrusted.append(sitename)
+                        self._penalize_random_false_positive(sitename)
                     self.sites = [d for d in self.sites if d['name'] not in distrusted]
                     self.sf.cachePut("sfaccounts_state_v5", "\n".join(distrusted))
+                    self.sf.cachePut(self._HEALTH_CACHE_KEY, dumps_health(self.aggregateHealth))
                 else:
                     self.sf.cachePut("sfaccounts_state_v5", "None")
             self.distrustedChecked = True
