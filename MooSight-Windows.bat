@@ -34,7 +34,7 @@ if not exist "requirements.txt" (
 REM --- Find Python 3.10, or install it automatically with Windows Package Manager ---
 py -3.10 --version >nul 2>&1
 if errorlevel 1 (
-  echo [1/7] Python 3.10 is not installed. Installing it automatically...
+  echo [1/8] Python 3.10 is not installed. Installing it automatically...
   where winget >nul 2>&1
   if errorlevel 1 (
     echo.
@@ -61,11 +61,11 @@ if errorlevel 1 (
   exit /b 0
 )
 
-echo [2/7] Python is ready.
+echo [2/8] Python is ready.
 
 REM --- Create isolated environment ---
 if not exist ".venv\Scripts\python.exe" (
-  echo [3/7] Preparing MooSight for the first time...
+  echo [3/8] Preparing MooSight for the first time...
   py -3.10 -m venv .venv
   if errorlevel 1 goto :fail
 
@@ -74,10 +74,10 @@ if not exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
   if errorlevel 1 goto :fail
 ) else (
-  echo [3/7] MooSight environment already exists.
+  echo [3/8] MooSight environment already exists.
 )
 
-echo [4/7] Checking installed Python dependencies...
+echo [4/8] Checking installed Python dependencies...
 ".venv\Scripts\python.exe" -m pip check
 if errorlevel 1 (
   echo.
@@ -87,7 +87,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [5/7] Running MooSight preflight checks...
+echo [5/8] Running MooSight preflight checks...
 ".venv\Scripts\python.exe" tools\preflight.py --host 127.0.0.1 --port 5001
 if errorlevel 1 (
   echo.
@@ -97,7 +97,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [6/7] Verifying modern core security and routing...
+echo [6/8] Enforcing modern exception-handling policy...
+".venv\Scripts\python.exe" tools\verify_exception_policy.py
+if errorlevel 1 (
+  echo.
+  echo MooSight found unsafe exception handling in the modernized runtime.
+  echo Bare except and BaseException handlers are not allowed in MooSight-owned modern code.
+  echo Review the FAIL line above and take a screenshot if you want help troubleshooting it.
+  pause
+  exit /b 1
+)
+
+echo [7/8] Verifying modern core security and routing...
 ".venv\Scripts\python.exe" tools\verify_modern_runtime.py
 if errorlevel 1 (
   echo.
@@ -108,7 +119,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [7/7] Starting MooSight with the modern core...
+echo [8/8] Starting MooSight with the modern core...
 echo.
 echo Your browser will open automatically.
 echo Keep this window open while using MooSight.
