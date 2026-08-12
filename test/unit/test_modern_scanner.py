@@ -1,3 +1,4 @@
+import socket
 import unittest
 from unittest.mock import patch
 
@@ -53,3 +54,45 @@ class TestModernSpiderFootScanner(unittest.TestCase):
             "scan", "id", "example.com", "INTERNET_NAME", None, {"x": 1}, start=False
         )
         self.assertIsNone(legacy_init.call_args.args[4])
+
+    def test_scanner_restores_socket_resolvers_after_legacy_initialization(self):
+        names = (
+            "getaddrinfo",
+            "getnameinfo",
+            "getfqdn",
+            "gethostbyname",
+            "gethostbyname_ex",
+            "gethostbyaddr",
+        )
+        before = {name: getattr(socket, name) for name in names if hasattr(socket, name)}
+
+        replacements = {name: (lambda *args, **kwargs: None) for name in before}
+
+        def mutate_resolvers(*args, **kwargs):
+            for name, replacement in replacements.items():
+                setattr(socket, name, replacement)
+
+        with patch.object(LegacySpiderFootScanner, "__init__", side_effect=mutate_resolvers):
+            ModernSpiderFootScanner(
+                "scan", "id", "example.com", "INTERNET_NAME", ["a"], {"x": 1}, start=False
+            )
+
+        for name, function in before.items():
+            with self.subTest(name=name):
+                self.assertIs(getattr(socket, name), function)
+
+    def test_scanner_restores_socket_resolvers_when_legacy_initialization_raises(self):
+        before = socket.getaddrinfo
+        replacement = lambda *args, **kwargs: None
+
+        def fail_after_mutation(*args, **kwargs):
+            socket.getaddrinfo = replacement
+            raise RuntimeError("boom")
+
+        with patch.object(LegacySpiderFootScanner, "__init__", side_effect=fail_after_mutation):
+            with self.assertRaises(RuntimeError):
+                ModernSpiderFootScanner(
+                    "scan", "id", "example.com", "INTERNET_NAME", ["a"], {"x": 1}, start=False
+                )
+
+        self.assertIs(socket.getaddrinfo, before)
