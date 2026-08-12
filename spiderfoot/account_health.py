@@ -92,6 +92,14 @@ def reliability(record: Mapping | None) -> tuple[str, float, int]:
     return label, score, total
 
 
+def reliability_text(record: Mapping | None) -> str:
+    """Return a compact user-facing site reliability summary."""
+    label, score, total = reliability(record)
+    if total == 0:
+        return "NEW (no history)"
+    return f"{label} ({score:.0%}, {total} observation{'s' if total != 1 else ''})"
+
+
 def dumps_health(data: Mapping | None) -> str:
     """Serialize normalized aggregate health deterministically."""
     return json.dumps(normalize_health(data), sort_keys=True, separators=(",", ":"))
