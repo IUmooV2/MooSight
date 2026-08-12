@@ -22,6 +22,7 @@ MODERN_PYTHON_FILES = (
     "spiderfoot/network_legacy.py",
     "spiderfoot/security.py",
     "spiderfoot/tls.py",
+    "spiderfoot/vulnerabilities.py",
     "tools/audit_mutable_class_state.py",
     "tools/audit_security.py",
     "tools/exception_audit.py",
