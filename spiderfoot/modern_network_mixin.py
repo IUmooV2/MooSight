@@ -12,7 +12,10 @@ urllib3 warning filters.
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 from spiderfoot.config import NetworkConfig
 from spiderfoot.http_client import HttpClient
@@ -77,6 +80,24 @@ class ModernNetworkMixin:
         """Return a logging-safe URL using the centralized redaction rules."""
         return redact_url(url)
 
+    def safeSocket(self, host: str, port: int, timeout: int):
+        """Create a bounded plain TCP socket without changing global state."""
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError("host must be a non-empty string")
+        try:
+            port_value = int(port)
+            timeout_value = float(timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("port and timeout must be numeric") from exc
+        if not 1 <= port_value <= 65535:
+            raise ValueError("port must be between 1 and 65535")
+        if timeout_value <= 0:
+            raise ValueError("timeout must be greater than zero")
+
+        sock = socket.create_connection((host.strip(), port_value), timeout_value)
+        sock.settimeout(timeout_value)
+        return sock
+
     def safeSSLSocket(
         self,
         host: str,
@@ -91,6 +112,38 @@ class ModernNetworkMixin:
         inspect a broken/untrusted endpoint can explicitly pass ``False``.
         """
         return create_tls_socket(host, port, timeout, verify=verify)
+
+    def useProxyForUrl(self, url: str) -> bool:
+        """Return whether the configured proxy should handle a URL.
+
+        The decision is based on validated ``NetworkConfig`` rather than direct
+        magic-key lookups. Loopback, private, link-local and local hostnames are
+        kept off the proxy, as is the proxy server itself.
+        """
+        config = self._network_config()
+        if not config.proxy_enabled:
+            return False
+        if not isinstance(url, str) or not url.strip():
+            return False
+
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+
+        host = parsed.hostname.rstrip(".").lower()
+        if host == config.proxy_host.rstrip(".").lower():
+            return False
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+            return False
+
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return True
+
+        if address.is_private or address.is_loopback or address.is_link_local:
+            return False
+        return True
 
     def fetchUrl(
         self,
