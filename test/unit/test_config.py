@@ -51,6 +51,30 @@ class TestTypedConfiguration(unittest.TestCase):
                 self.assertTrue(config.proxy_enabled)
                 self.assertEqual(config.proxy_url(), url)
 
+    def test_proxy_routing_bypasses_local_and_proxy_targets(self):
+        config = NetworkConfig(proxy_type="5", proxy_host="proxy.example", proxy_port=1080)
+        bypassed = (
+            "http://127.0.0.1:5001/",
+            "http://10.0.0.5/",
+            "http://169.254.1.2/",
+            "http://localhost/",
+            "http://service.local/",
+            "https://proxy.example/",
+        )
+        for url in bypassed:
+            with self.subTest(url=url):
+                self.assertFalse(config.should_proxy_url(url))
+
+        self.assertTrue(config.should_proxy_url("https://example.com/path"))
+        self.assertTrue(config.should_proxy_url("https://8.8.8.8/"))
+
+    def test_proxy_routing_rejects_invalid_urls_and_disabled_proxy(self):
+        self.assertFalse(NetworkConfig().should_proxy_url("https://example.com"))
+        config = NetworkConfig(proxy_type="5", proxy_host="proxy.example", proxy_port=1080)
+        for value in ("", "not-a-url", "file:///tmp/test"):
+            with self.subTest(value=value):
+                self.assertFalse(config.should_proxy_url(value))
+
     def test_proxy_type_requires_host(self):
         for proxy_type in ("4", "5", "HTTP", "TOR"):
             with self.subTest(proxy_type=proxy_type):
