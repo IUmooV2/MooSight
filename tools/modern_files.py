@@ -29,6 +29,7 @@ MODERN_PYTHON_FILES = (
     "tools/modern_files.py",
     "tools/preflight.py",
     "tools/verify_exception_policy.py",
+    "tools/verify_legacy_exception_containment.py",
     "tools/verify_modern_runtime.py",
     "tools/verify_modern_security.py",
 )
