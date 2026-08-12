@@ -3,9 +3,8 @@
 """MooSight application entry point.
 
 This transitional entry point keeps SpiderFoot's existing CLI/web startup code
-intact while routing runtime core construction through ``ModernSpiderFoot``.
-It avoids a risky in-place rewrite of ``sf.py`` and ``sfscan.py`` during the
-modernization phase.
+intact while routing runtime core and scanner construction through MooSight's
+modern compatibility facades.
 """
 
 from __future__ import annotations
@@ -13,18 +12,14 @@ from __future__ import annotations
 import sf
 import sfscan
 from spiderfoot.modern_core import ModernSpiderFoot
+from spiderfoot.modern_scanner import ModernSpiderFootScanner
 
 
 def install_modern_core() -> None:
-    """Install the modern core into the legacy startup modules.
-
-    ``sf.py`` and ``sfscan.py`` resolve their imported ``SpiderFoot`` symbol at
-    runtime when creating core instances. Rebinding those module globals keeps
-    all existing startup/CLI behavior while making new instances use MooSight's
-    modern networking implementation.
-    """
+    """Install MooSight's modern core and scanner into legacy startup modules."""
     sf.SpiderFoot = ModernSpiderFoot
     sfscan.SpiderFoot = ModernSpiderFoot
+    sfscan.SpiderFootScanner = ModernSpiderFootScanner
 
 
 def main() -> None:
