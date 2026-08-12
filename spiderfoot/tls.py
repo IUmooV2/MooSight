@@ -77,10 +77,28 @@ def open_tls_socket(
 
     raw_socket = open_tcp_socket(host, port, timeout=settings.timeout)
     try:
-        return tls_context.wrap_socket(
-            raw_socket,
-            server_hostname=server_hostname if settings.verify else server_hostname,
-        )
+        return tls_context.wrap_socket(raw_socket, server_hostname=server_hostname)
     except Exception:
         raw_socket.close()
         raise
+
+
+def create_tls_socket(
+    host: str,
+    port: int,
+    timeout: float = 10.0,
+    *,
+    verify: bool = True,
+    server_hostname: str | None = None,
+) -> ssl.SSLSocket:
+    """Compatibility facade used by the modern SpiderFoot network mixin.
+
+    Keep the historical positional ``host, port, timeout`` calling convention
+    while delegating all TLS behavior to :func:`open_tls_socket`.
+    """
+    settings = TLSSettings(
+        verify=verify,
+        timeout=float(timeout),
+        server_hostname=server_hostname or host,
+    )
+    return open_tls_socket(host, port, settings=settings)
