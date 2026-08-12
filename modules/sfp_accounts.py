@@ -36,16 +36,18 @@ class sfp_accounts(SpiderFootPlugin):
         "userfromemail": True,
         "permutate": False,
         "usernamesize": 4,
+        "allow_insecure_tls": False,
         "_maxthreads": 20
     }
 
     optdescs = {
         "ignorenamedict": "Don't bother looking up names that are just stand-alone first names (too many false positives).",
         "ignoreworddict": "Don't bother looking up names that appear in the dictionary.",
-        "musthavename": "Require the username to appear in the returned page when possible. This reduces false positives.",
+        "musthavename": "Require the username to appear in returned text when the dataset does not already provide a positive fingerprint.",
         "userfromemail": "Extract usernames from e-mail addresses.",
         "permutate": "Look for similar username permutations. This can be noisy and is disabled by default.",
         "usernamesize": "Minimum username length to query.",
+        "allow_insecure_tls": "Allow account checks to bypass TLS certificate verification. Disabled by default.",
         "_maxthreads": "Maximum concurrent account checks."
     }
 
@@ -62,11 +64,16 @@ class sfp_accounts(SpiderFootPlugin):
         self.results = self.tempStorage()
         self.commonNames = list()
         self.reportedUsers = list()
+        self.siteResults = dict()
+        self.sites = list()
         self.errorState = False
         self.distrustedChecked = False
         self.__dataSource__ = "Social Media"
         self.lock = threading.Lock()
 
+        # Own a per-instance options dictionary rather than mutating the class
+        # defaults shared by future module instances.
+        self.opts = dict(type(self).opts)
         for opt in list(userOpts.keys()):
             self.opts[opt] = userOpts[opt]
 
@@ -79,7 +86,7 @@ class sfp_accounts(SpiderFootPlugin):
         if content is None:
             url = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
             data = self.sf.fetchUrl(url, useragent="SpiderFoot")
-            if data['content'] is None:
+            if not data or data.get('content') is None:
                 self.error(f"Unable to fetch {url}")
                 self.errorState = True
                 return
@@ -94,8 +101,8 @@ class sfp_accounts(SpiderFootPlugin):
                 and site.get('uri_check')
                 and site.get('name')
             ]
-        except Exception as e:
-            self.error(f"Unable to parse social media accounts list: {e}")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.error(f"Unable to parse social media accounts list: {exc}")
             self.errorState = True
 
     def watchedEvents(self):
@@ -117,8 +124,24 @@ class sfp_accounts(SpiderFootPlugin):
     def _host(url):
         try:
             return (urlparse(url).hostname or '').lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ''
+
+    @staticmethod
+    def _header(headers, name):
+        """Return a response header value without assuming header casing."""
+        wanted = name.lower()
+        for key, value in (headers or {}).items():
+            if str(key).lower() == wanted:
+                return value
+        return ''
+
+    @staticmethod
+    def _format_site_value(value, account):
+        """Format optional WhatsMyName request values safely."""
+        if not isinstance(value, str):
+            return value
+        return value.replace('{account}', account)
 
     def checkSite(self, name, site):
         name = self._normalize_username(name)
@@ -131,24 +154,37 @@ class sfp_accounts(SpiderFootPlugin):
         except (KeyError, ValueError, IndexError):
             return
 
-        # Reject malformed/non-web dataset entries rather than treating them as
-        # successful account checks.
         if not self._host(url) or not url.lower().startswith(('http://', 'https://')):
             return
 
         retname = f"{site['name']} (Category: {site.get('cat', 'unknown')})\n<SFURL>{ret_url}</SFURL>"
-        post = site.get('post_body')
+        post = self._format_site_value(site.get('post_body'), name)
+        headers = {
+            str(key): self._format_site_value(value, name)
+            for key, value in (site.get('headers') or {}).items()
+        }
 
         res = self.sf.fetchUrl(
             url,
             postData=post,
+            headers=headers or None,
             timeout=self.opts['_fetchtimeout'],
             useragent=self.opts['_useragent'],
             noLog=True,
-            verify=False
+            verify=bool(self.opts.get('allow_insecure_tls', False)) is False
         )
 
+        if not res:
+            with self.lock:
+                self.siteResults[retname] = False
+            return
+
         content = res.get('content')
+        if isinstance(content, bytes):
+            content = content.decode('utf-8', errors='replace')
+        elif content is not None and not isinstance(content, str):
+            content = str(content)
+
         code = str(res.get('code') or '')
         if not content:
             with self.lock:
@@ -173,11 +209,11 @@ class sfp_accounts(SpiderFootPlugin):
                 self.siteResults[retname] = False
             return
 
-        # WhatsMyName's positive/missing fingerprints are the primary evidence.
-        # Requiring the literal username is an extra validation layer, but only
-        # when the service returns an HTML/text body where that test is meaningful.
-        if self.opts['musthavename']:
-            ctype = str((res.get('headers') or {}).get('content-type', '')).lower()
+        # A positive WhatsMyName fingerprint is already site-specific evidence.
+        # Only use literal username presence as an extra heuristic for entries
+        # that do not define such a fingerprint.
+        if self.opts['musthavename'] and not expected:
+            ctype = str(self._header(res.get('headers'), 'content-type')).lower()
             textual = not ctype or any(t in ctype for t in ('text/', 'json', 'javascript', 'xml'))
             if textual and name.lower() not in content.lower():
                 self.debug(f"Skipping {site['name']} because the username was not present in the response.")
@@ -201,8 +237,8 @@ class sfp_accounts(SpiderFootPlugin):
                     return
                 try:
                     self.checkSite(username, site)
-                except Exception as e:
-                    self.debug(f'Thread {threading.current_thread().name} exception: {e}')
+                except Exception as exc:
+                    self.debug(f'Thread {threading.current_thread().name} exception: {exc}')
                 finally:
                     queue.task_done()
 
@@ -229,8 +265,6 @@ class sfp_accounts(SpiderFootPlugin):
         return sorted([site for site, found in self.siteResults.items() if found])
 
     def generatePermutations(self, username):
-        # Keep permutations deliberately conservative. Large typo-generation
-        # sets create many false positives and unnecessary requests.
         permutations = set()
         for marker in ('_', '-'):
             permutations.add(username + marker)
