@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import urllib.parse
 from copy import deepcopy
 
 import netaddr
@@ -19,6 +20,7 @@ from sflib import SpiderFoot as LegacySpiderFoot
 from spiderfoot.certificates import parse_certificate
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
 from spiderfoot.security import redact_url
+from spiderfoot.vulnerabilities import format_cve_result, parse_circl, parse_nvd_v2
 
 
 class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
@@ -160,6 +162,57 @@ class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
                 "certerror": True,
                 "issued": "",
             }
+
+    def cveInfo(self, cveId: str, sources: str = "nist,circl") -> tuple[str, str]:
+        """Look up a CVE using the modern NVD 2.0 response format first.
+
+        The public return contract remains SpiderFoot's ``(event_type, text)``
+        tuple. Network access goes through the modern fetch stack, cache entries
+        are source/schema-specific, and malformed payloads are treated as an
+        unknown result without broad ``BaseException`` handling.
+        """
+        if not isinstance(cveId, str) or not cveId.strip():
+            return format_cve_result(str(cveId or "Unknown"), None)
+
+        cve_id = cveId.strip().upper()
+        requested_sources = [source.strip().lower() for source in str(sources).split(",") if source.strip()]
+        if not requested_sources:
+            requested_sources = ["nist", "circl"]
+
+        for source in requested_sources:
+            if source not in {"nist", "circl"}:
+                continue
+
+            cache_key = f"{source}-modern-{cve_id}"
+            payload = self.cacheGet(cache_key, 24)
+
+            if not payload:
+                if source == "nist":
+                    query = urllib.parse.urlencode({"cveIds": cve_id})
+                    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?{query}"
+                else:
+                    url = f"https://cve.circl.lu/api/cve/{urllib.parse.quote(cve_id, safe='')}"
+
+                response = self.fetchUrl(url, timeout=10, noLog=True)
+                if not response or response.get("code") != "200" or not response.get("content"):
+                    continue
+                payload = response["content"]
+                try:
+                    self.cachePut(cache_key, payload)
+                except (OSError, UnicodeError, TypeError, ValueError) as exc:
+                    self.debug(f"Unable to cache CVE response from {source.upper()}: {exc}")
+
+            if source == "nist":
+                info = parse_nvd_v2(payload)
+            else:
+                info = parse_circl(payload)
+
+            if info is not None:
+                return format_cve_result(cve_id, info)
+
+            self.debug(f"Unable to parse CVE response from {source.upper()}")
+
+        return format_cve_result(cve_id, None)
 
     def close(self) -> None:
         """Release resources owned by the modern core facade."""
