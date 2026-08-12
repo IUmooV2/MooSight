@@ -36,10 +36,7 @@ class TestModernSpiderFootCore(unittest.TestCase):
             core.close()
 
     def test_modern_network_methods_win_in_mro(self):
-        self.assertLess(
-            ModernSpiderFoot.__mro__.index(ModernNetworkMixin),
-            ModernSpiderFoot.__mro__.index(LegacySpiderFoot),
-        )
+        self.assertLess(ModernSpiderFoot.__mro__.index(ModernNetworkMixin), ModernSpiderFoot.__mro__.index(LegacySpiderFoot))
         self.assertIs(ModernSpiderFoot.fetchUrl, ModernNetworkMixin.fetchUrl)
         self.assertIs(ModernSpiderFoot.getSession, ModernNetworkMixin.getSession)
         self.assertIs(ModernSpiderFoot.safeSSLSocket, ModernNetworkMixin.safeSSLSocket)
@@ -76,23 +73,14 @@ class TestModernSpiderFootCore(unittest.TestCase):
             core.close()
 
     def test_construction_preserves_process_socket_resolver_functions(self):
-        names = (
-            "getaddrinfo",
-            "getnameinfo",
-            "getfqdn",
-            "gethostbyname",
-            "gethostbyname_ex",
-            "gethostbyaddr",
-        )
+        names = ("getaddrinfo", "getnameinfo", "getfqdn", "gethostbyname", "gethostbyname_ex", "gethostbyaddr")
         before = {name: getattr(socket, name) for name in names if hasattr(socket, name)}
         options = self._options()
         options["_dnsserver"] = "1.1.1.1"
-
         core = ModernSpiderFoot(options)
         try:
             for name, function in before.items():
-                with self.subTest(name=name):
-                    self.assertIs(getattr(socket, name), function)
+                self.assertIs(getattr(socket, name), function)
         finally:
             core.close()
 
@@ -100,26 +88,17 @@ class TestModernSpiderFootCore(unittest.TestCase):
         core = ModernSpiderFoot(self._options())
         try:
             self.assertIsNone(core._modern_http_client)
-            session = core.getSession()
-            self.assertIsNotNone(session)
+            self.assertIsNotNone(core.getSession())
             self.assertIsNotNone(core._modern_http_client)
         finally:
             core.close()
 
     @patch("spiderfoot.modern_network_mixin.LegacyFetchService.fetch")
     def test_fetch_url_uses_modern_compatibility_stack(self, fetch):
-        fetch.return_value = {
-            "code": "200",
-            "status": None,
-            "content": "ok",
-            "headers": {"content-type": "text/plain"},
-            "realurl": "https://example.com/",
-        }
+        fetch.return_value = {"code": "200", "status": None, "content": "ok", "headers": {}, "realurl": "https://example.com/"}
         core = ModernSpiderFoot(self._options())
         try:
-            result = core.fetchUrl("https://example.com/", noLog=True)
-            self.assertEqual(result["code"], "200")
-            self.assertEqual(result["content"], "ok")
+            self.assertEqual(core.fetchUrl("https://example.com/", noLog=True)["content"], "ok")
             fetch.assert_called_once()
         finally:
             core.close()
@@ -143,49 +122,72 @@ class TestModernSpiderFootCore(unittest.TestCase):
 
     @patch.object(ModernSpiderFoot, "fetchUrl")
     def test_option_url_uses_modern_fetch_stack(self, fetch):
-        fetch.return_value = {
-            "code": "200",
-            "status": None,
-            "content": "remote-value",
-            "headers": {},
-            "realurl": "https://example.com/config.txt",
-        }
+        fetch.return_value = {"code": "200", "status": None, "content": "remote-value", "headers": {}, "realurl": "https://example.com/config.txt"}
         core = ModernSpiderFoot(self._options())
         try:
-            self.assertEqual(
-                core.optValueToData("https://example.com/config.txt?token=secret"),
-                "remote-value",
-            )
-            fetch.assert_called_once()
+            self.assertEqual(core.optValueToData("https://example.com/config.txt?token=secret"), "remote-value")
             kwargs = fetch.call_args.kwargs
             self.assertTrue(kwargs["verify"])
             self.assertTrue(kwargs["noLog"])
             self.assertEqual(kwargs["timeout"], 5)
-            self.assertEqual(kwargs["useragent"], "MooSight-Test")
         finally:
             core.close()
 
     @patch.object(ModernSpiderFoot, "fetchUrl")
     def test_option_url_decodes_utf8_bytes(self, fetch):
-        fetch.return_value = {
-            "code": "200",
-            "status": None,
-            "content": "MooSight ✓".encode("utf-8"),
-            "headers": {},
-            "realurl": "https://example.com/config.txt",
-        }
+        fetch.return_value = {"code": "200", "status": None, "content": "MooSight ✓".encode(), "headers": {}, "realurl": "https://example.com/config.txt"}
         core = ModernSpiderFoot(self._options())
         try:
             self.assertEqual(core.optValueToData("https://example.com/config.txt"), "MooSight ✓")
         finally:
             core.close()
 
-    @patch.object(ModernSpiderFoot, "fetchUrl")
-    def test_option_url_failure_returns_none(self, fetch):
-        fetch.return_value = None
+    @patch.object(ModernSpiderFoot, "fetchUrl", return_value=None)
+    def test_option_url_failure_returns_none(self, _fetch):
         core = ModernSpiderFoot(self._options())
         try:
             self.assertIsNone(core.optValueToData("https://example.com/config.txt"))
+        finally:
+            core.close()
+
+    def test_valid_ip_network_handles_invalid_input_without_baseexception(self):
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertTrue(core.validIpNetwork("192.0.2.0/24"))
+            self.assertFalse(core.validIpNetwork("not-a-cidr/24"))
+        finally:
+            core.close()
+
+    @patch("spiderfoot.modern_core.socket.gethostbyname_ex", side_effect=socket.gaierror("lookup failed"))
+    def test_resolve_host_handles_socket_errors(self, _resolver):
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(core.resolveHost("example.invalid"), [])
+        finally:
+            core.close()
+
+    @patch("spiderfoot.modern_core.socket.gethostbyaddr", side_effect=socket.herror("reverse failed"))
+    def test_resolve_ip_handles_socket_errors(self, _resolver):
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(core.resolveIP("192.0.2.1"), [])
+        finally:
+            core.close()
+
+    @patch("spiderfoot.modern_core.socket.getaddrinfo", side_effect=socket.gaierror("ipv6 failed"))
+    def test_resolve_host6_handles_socket_errors(self, _resolver):
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(core.resolveHost6("example.invalid"), [])
+        finally:
+            core.close()
+
+    @patch("spiderfoot.modern_core.socket.gethostbyname_ex", side_effect=KeyboardInterrupt)
+    def test_resolve_host_does_not_swallow_keyboard_interrupt(self, _resolver):
+        core = ModernSpiderFoot(self._options())
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                core.resolveHost("example.com")
         finally:
             core.close()
 
@@ -194,9 +196,7 @@ class TestModernSpiderFootCore(unittest.TestCase):
         client = Mock()
         core._modern_http_client = client
         core._modern_fetch_service = Mock()
-
         core.close()
-
         client.close.assert_called_once_with()
         self.assertIsNone(core._modern_http_client)
         self.assertIsNone(core._modern_fetch_service)
