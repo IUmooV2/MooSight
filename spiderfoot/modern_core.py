@@ -16,6 +16,7 @@ from copy import deepcopy
 import netaddr
 
 from sflib import SpiderFoot as LegacySpiderFoot
+from spiderfoot.certificates import parse_certificate
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
 from spiderfoot.security import redact_url
 
@@ -139,6 +140,26 @@ class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
             self.debug(f"Unable to resolve host: {hostname} ({exc})")
             return []
         return addrs
+
+    def parseCert(self, rawcert: str | bytes, fqdn: str = None, expiringdays: int = 30) -> dict | None:
+        """Parse certificates without using legacy ``BaseException`` handlers."""
+        if not rawcert:
+            self.error(f"Invalid certificate: {rawcert}")
+            return None
+        try:
+            return parse_certificate(rawcert, fqdn=fqdn, expiringdays=expiringdays)
+        except (ValueError, TypeError) as exc:
+            self.error(f"Error processing certificate: {exc}")
+            return {
+                "text": "",
+                "issuer": "",
+                "altnames": [],
+                "expired": False,
+                "expiring": False,
+                "mismatch": False,
+                "certerror": True,
+                "issued": "",
+            }
 
     def close(self) -> None:
         """Release resources owned by the modern core facade."""
