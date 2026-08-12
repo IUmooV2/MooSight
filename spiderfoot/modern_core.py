@@ -1,29 +1,20 @@
 # -*- coding: utf-8 -*-
 """Modernized SpiderFoot core facade used during MooSight migration.
 
-This class intentionally leaves the legacy ``sflib.SpiderFoot`` implementation
-available while giving MooSight a drop-in core whose networking methods are
-resolved from ``ModernNetworkMixin`` first. That lets us exercise the modern
-transport stack before deleting the large legacy networking block from sflib.
+The facade keeps the legacy ``sflib.SpiderFoot`` API surface available while
+routing networking through MooSight's modern, instance-scoped implementation.
+Its constructor intentionally initializes the small amount of safe legacy state
+directly instead of calling the legacy constructor, which currently mutates
+process-wide TLS and DNS resolver behavior.
 """
 
 from __future__ import annotations
 
-import socket
-import ssl
+import logging
+from copy import deepcopy
 
 from sflib import SpiderFoot as LegacySpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
-
-
-_SOCKET_RESOLVER_FUNCTIONS = (
-    "getaddrinfo",
-    "getnameinfo",
-    "getfqdn",
-    "gethostbyname",
-    "gethostbyname_ex",
-    "gethostbyaddr",
-)
 
 
 class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
@@ -31,33 +22,23 @@ class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
 
     Method resolution order is deliberate: networking methods implemented by
     ``ModernNetworkMixin`` win over the historical implementations in
-    ``LegacySpiderFoot``. All unrelated legacy behavior remains available.
+    ``LegacySpiderFoot``. All unrelated legacy methods remain inherited.
 
-    The legacy constructor currently changes process-wide TLS and DNS/socket
-    behavior. Until that code is physically removed from ``sflib.py``, this
-    facade contains those mutations to the constructor call and restores the
-    exact process state immediately afterward.
+    The legacy constructor only establishes the option copy/logger before
+    applying global TLS/DNS mutations. MooSight reproduces the safe initialization
+    locally and never invokes that side-effectful constructor.
     """
 
     def __init__(self, options: dict) -> None:
-        previous_https_context = ssl._create_default_https_context
-        previous_socket_functions = {
-            name: getattr(socket, name)
-            for name in _SOCKET_RESOLVER_FUNCTIONS
-            if hasattr(socket, name)
-        }
+        if not isinstance(options, dict):
+            raise TypeError(f"options is {type(options)}; expected dict()")
 
-        try:
-            super().__init__(options)
-        finally:
-            # LegacySpiderFoot currently assigns an unverified HTTPS context and
-            # may ask dnspython to replace process-wide socket resolver helpers.
-            # Never let either mutation escape construction of the modern core.
-            ssl._create_default_https_context = previous_https_context
-            for name, function in previous_socket_functions.items():
-                setattr(socket, name, function)
+        # Match the safe state established by LegacySpiderFoot.__init__ without
+        # its process-wide SSL or DNS resolver mutations.
+        self.opts = deepcopy(options)
+        self.log = logging.getLogger("spiderfoot.sflib")
 
-        # Ensure network resources always start instance-local and lazy.
+        # Resource-owning modern networking components are created lazily.
         self._modern_http_client = None
         self._modern_fetch_service = None
 
