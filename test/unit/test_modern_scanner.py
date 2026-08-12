@@ -25,6 +25,7 @@ class TestModernSpiderFootScanner(unittest.TestCase):
         passed_modules = args[4]
         self.assertEqual(passed_modules, modules)
         self.assertIsNot(passed_modules, modules)
+        self.assertFalse(legacy_init.call_args.kwargs["start"])
         self.assertEqual(scanner._SpiderFootScanner__moduleInstances, {})
         self.assertEqual(scanner._SpiderFootScanner__modconfig, {})
 
@@ -65,7 +66,6 @@ class TestModernSpiderFootScanner(unittest.TestCase):
             "gethostbyaddr",
         )
         before = {name: getattr(socket, name) for name in names if hasattr(socket, name)}
-
         replacements = {name: (lambda *args, **kwargs: None) for name in before}
 
         def mutate_resolvers(*args, **kwargs):
@@ -96,3 +96,36 @@ class TestModernSpiderFootScanner(unittest.TestCase):
                 )
 
         self.assertIs(socket.getaddrinfo, before)
+
+    def test_auto_start_runs_only_after_resolver_state_is_restored(self):
+        original = socket.getaddrinfo
+        replacement = lambda *args, **kwargs: None
+        observed = []
+
+        def mutate_resolver(*args, **kwargs):
+            socket.getaddrinfo = replacement
+
+        def start_scan(_self):
+            observed.append(socket.getaddrinfo)
+
+        with patch.object(LegacySpiderFootScanner, "__init__", side_effect=mutate_resolver) as legacy_init:
+            with patch.object(LegacySpiderFootScanner, "_SpiderFootScanner__startScan", start_scan):
+                ModernSpiderFootScanner(
+                    "scan", "id", "example.com", "INTERNET_NAME", ["a"], {"x": 1}, start=True
+                )
+
+        self.assertFalse(legacy_init.call_args.kwargs["start"])
+        self.assertEqual(observed, [original])
+        self.assertIs(socket.getaddrinfo, original)
+
+    @patch.object(LegacySpiderFootScanner, "_SpiderFootScanner__startScan")
+    @patch.object(LegacySpiderFootScanner, "__init__", return_value=None)
+    def test_start_false_does_not_start_scan(self, _legacy_init, start_scan):
+        ModernSpiderFootScanner(
+            "scan", "id", "example.com", "INTERNET_NAME", ["a"], {"x": 1}, start=False
+        )
+        start_scan.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
