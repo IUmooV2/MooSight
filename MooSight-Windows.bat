@@ -28,7 +28,7 @@ if not exist "requirements.txt" (
 REM --- Find Python 3.10, or install it automatically with Windows Package Manager ---
 py -3.10 --version >nul 2>&1
 if errorlevel 1 (
-  echo [1/5] Python 3.10 is not installed. Installing it automatically...
+  echo [1/6] Python 3.10 is not installed. Installing it automatically...
   where winget >nul 2>&1
   if errorlevel 1 (
     echo.
@@ -55,11 +55,11 @@ if errorlevel 1 (
   exit /b 0
 )
 
-echo [2/5] Python is ready.
+echo [2/6] Python is ready.
 
 REM --- Create isolated environment ---
 if not exist ".venv\Scripts\python.exe" (
-  echo [3/5] Preparing MooSight for the first time...
+  echo [3/6] Preparing MooSight for the first time...
   py -3.10 -m venv .venv
   if errorlevel 1 goto :fail
 
@@ -68,10 +68,10 @@ if not exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
   if errorlevel 1 goto :fail
 ) else (
-  echo [3/5] MooSight environment already exists.
+  echo [3/6] MooSight environment already exists.
 )
 
-echo [4/5] Checking installed Python dependencies...
+echo [4/6] Checking installed Python dependencies...
 ".venv\Scripts\python.exe" -m pip check
 if errorlevel 1 (
   echo.
@@ -81,7 +81,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [5/5] Starting MooSight...
+echo [5/6] Running MooSight preflight checks...
+".venv\Scripts\python.exe" tools\preflight.py --host 127.0.0.1 --port 5001
+if errorlevel 1 (
+  echo.
+  echo MooSight's preflight checks found a problem that would prevent a reliable start.
+  echo Review the FAIL line above. If you want help, take a screenshot of this window.
+  pause
+  exit /b 1
+)
+
+echo [6/6] Starting MooSight...
 echo.
 echo Your browser will open automatically.
 echo Keep this window open while using MooSight.
@@ -94,7 +104,7 @@ set "EXITCODE=%ERRORLEVEL%"
 if not "%EXITCODE%"=="0" (
   echo.
   echo MooSight stopped with error code %EXITCODE%.
-  echo Take a screenshot of this window and send it to ChatGPT.
+  echo Take a screenshot of this window and send it here for troubleshooting.
   pause
 )
 exit /b %EXITCODE%
@@ -111,6 +121,6 @@ exit /b 1
 :fail
 echo.
 echo MooSight setup did not finish successfully.
-echo Take a screenshot of the error above and send it to ChatGPT.
+echo Take a screenshot of the error above and send it here for troubleshooting.
 pause
 exit /b 1
