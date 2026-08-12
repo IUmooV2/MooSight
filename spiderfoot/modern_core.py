@@ -9,8 +9,21 @@ transport stack before deleting the large legacy networking block from sflib.
 
 from __future__ import annotations
 
+import socket
+import ssl
+
 from sflib import SpiderFoot as LegacySpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
+
+
+_SOCKET_RESOLVER_FUNCTIONS = (
+    "getaddrinfo",
+    "getnameinfo",
+    "getfqdn",
+    "gethostbyname",
+    "gethostbyname_ex",
+    "gethostbyaddr",
+)
 
 
 class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
@@ -19,21 +32,30 @@ class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
     Method resolution order is deliberate: networking methods implemented by
     ``ModernNetworkMixin`` win over the historical implementations in
     ``LegacySpiderFoot``. All unrelated legacy behavior remains available.
+
+    The legacy constructor currently changes process-wide TLS and DNS/socket
+    behavior. Until that code is physically removed from ``sflib.py``, this
+    facade contains those mutations to the constructor call and restores the
+    exact process state immediately afterward.
     """
 
     def __init__(self, options: dict) -> None:
-        # Legacy initialization still configures database/logging-related state.
-        # The global TLS mutation in LegacySpiderFoot remains a known migration
-        # item until sflib itself is surgically cleaned up. Restore the previous
-        # process-wide HTTPS context immediately so constructing this facade does
-        # not leave the interpreter in an insecure state.
-        import ssl
-
         previous_https_context = ssl._create_default_https_context
+        previous_socket_functions = {
+            name: getattr(socket, name)
+            for name in _SOCKET_RESOLVER_FUNCTIONS
+            if hasattr(socket, name)
+        }
+
         try:
             super().__init__(options)
         finally:
+            # LegacySpiderFoot currently assigns an unverified HTTPS context and
+            # may ask dnspython to replace process-wide socket resolver helpers.
+            # Never let either mutation escape construction of the modern core.
             ssl._create_default_https_context = previous_https_context
+            for name, function in previous_socket_functions.items():
+                setattr(socket, name, function)
 
         # Ensure network resources always start instance-local and lazy.
         self._modern_http_client = None
