@@ -88,7 +88,7 @@ if errorlevel 1 (
 )
 
 echo [5/10] Running MooSight preflight checks...
-".venv\Scripts\python.exe" tools\preflight.py --host 127.0.0.1 --port 5001
+".venv\Scripts\python.exe" -m tools.preflight --host 127.0.0.1 --port 5001
 if errorlevel 1 (
   echo.
   echo MooSight's preflight checks found a problem that would prevent a reliable start.
@@ -98,7 +98,7 @@ if errorlevel 1 (
 )
 
 echo [6/10] Enforcing modern exception-handling policy...
-".venv\Scripts\python.exe" tools\verify_exception_policy.py
+".venv\Scripts\python.exe" -m tools.verify_exception_policy
 if errorlevel 1 (
   echo.
   echo MooSight found unsafe exception handling in the modernized runtime.
@@ -109,7 +109,7 @@ if errorlevel 1 (
 )
 
 echo [7/10] Enforcing modern security policy...
-".venv\Scripts\python.exe" tools\verify_modern_security.py
+".venv\Scripts\python.exe" -m tools.verify_modern_security
 if errorlevel 1 (
   echo.
   echo MooSight found a blocked security pattern in the modernized runtime.
@@ -120,7 +120,7 @@ if errorlevel 1 (
 )
 
 echo [8/10] Verifying legacy exception containment...
-".venv\Scripts\python.exe" tools\verify_legacy_exception_containment.py
+".venv\Scripts\python.exe" -m tools.verify_legacy_exception_containment
 if errorlevel 1 (
   echo.
   echo MooSight found a legacy method with unsafe exception handling still reachable at runtime.
@@ -130,7 +130,7 @@ if errorlevel 1 (
 )
 
 echo [9/10] Verifying modern core security and routing...
-".venv\Scripts\python.exe" tools\verify_modern_runtime.py
+".venv\Scripts\python.exe" -m tools.verify_modern_runtime
 if errorlevel 1 (
   echo.
   echo MooSight's modern runtime verification failed.
