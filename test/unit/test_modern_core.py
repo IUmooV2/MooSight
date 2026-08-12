@@ -43,7 +43,29 @@ class TestModernSpiderFootCore(unittest.TestCase):
         self.assertIs(ModernSpiderFoot.safeSSLSocket, ModernNetworkMixin.safeSSLSocket)
         self.assertIs(ModernSpiderFoot.removeUrlCreds, ModernNetworkMixin.removeUrlCreds)
 
-    def test_construction_restores_process_https_context(self):
+    def test_constructor_does_not_call_side_effectful_legacy_constructor(self):
+        with patch.object(LegacySpiderFoot, "__init__", side_effect=AssertionError("legacy init called")) as legacy_init:
+            core = ModernSpiderFoot(self._options())
+            try:
+                legacy_init.assert_not_called()
+            finally:
+                core.close()
+
+    def test_options_are_deep_copied(self):
+        options = self._options()
+        options["nested"] = {"value": [1]}
+        core = ModernSpiderFoot(options)
+        try:
+            options["nested"]["value"].append(2)
+            self.assertEqual(core.opts["nested"]["value"], [1])
+        finally:
+            core.close()
+
+    def test_constructor_rejects_non_dict_options(self):
+        with self.assertRaises(TypeError):
+            ModernSpiderFoot(None)
+
+    def test_construction_preserves_process_https_context(self):
         before = ssl._create_default_https_context
         core = ModernSpiderFoot(self._options())
         try:
@@ -51,7 +73,7 @@ class TestModernSpiderFootCore(unittest.TestCase):
         finally:
             core.close()
 
-    def test_construction_restores_process_socket_resolver_functions(self):
+    def test_construction_preserves_process_socket_resolver_functions(self):
         names = (
             "getaddrinfo",
             "getnameinfo",
