@@ -10,6 +10,7 @@ from __future__ import annotations
 
 MODERN_PYTHON_FILES = (
     "moosight.py",
+    "spiderfoot/account_health.py",
     "spiderfoot/certificates.py",
     "spiderfoot/config.py",
     "spiderfoot/http_client.py",
