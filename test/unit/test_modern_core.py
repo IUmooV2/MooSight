@@ -1,6 +1,8 @@
 import socket
 import ssl
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from sflib import SpiderFoot as LegacySpiderFoot
@@ -119,6 +121,71 @@ class TestModernSpiderFootCore(unittest.TestCase):
             self.assertEqual(result["code"], "200")
             self.assertEqual(result["content"], "ok")
             fetch.assert_called_once()
+        finally:
+            core.close()
+
+    def test_option_plain_string_is_returned_unchanged(self):
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(core.optValueToData("plain-value"), "plain-value")
+        finally:
+            core.close()
+
+    def test_option_file_is_read_as_utf8(self):
+        core = ModernSpiderFoot(self._options())
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "option.txt"
+                path.write_text("MooSight ✓", encoding="utf-8")
+                self.assertEqual(core.optValueToData(f"@{path}"), "MooSight ✓")
+        finally:
+            core.close()
+
+    @patch.object(ModernSpiderFoot, "fetchUrl")
+    def test_option_url_uses_modern_fetch_stack(self, fetch):
+        fetch.return_value = {
+            "code": "200",
+            "status": None,
+            "content": "remote-value",
+            "headers": {},
+            "realurl": "https://example.com/config.txt",
+        }
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(
+                core.optValueToData("https://example.com/config.txt?token=secret"),
+                "remote-value",
+            )
+            fetch.assert_called_once()
+            kwargs = fetch.call_args.kwargs
+            self.assertTrue(kwargs["verify"])
+            self.assertTrue(kwargs["noLog"])
+            self.assertEqual(kwargs["timeout"], 5)
+            self.assertEqual(kwargs["useragent"], "MooSight-Test")
+        finally:
+            core.close()
+
+    @patch.object(ModernSpiderFoot, "fetchUrl")
+    def test_option_url_decodes_utf8_bytes(self, fetch):
+        fetch.return_value = {
+            "code": "200",
+            "status": None,
+            "content": "MooSight ✓".encode("utf-8"),
+            "headers": {},
+            "realurl": "https://example.com/config.txt",
+        }
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertEqual(core.optValueToData("https://example.com/config.txt"), "MooSight ✓")
+        finally:
+            core.close()
+
+    @patch.object(ModernSpiderFoot, "fetchUrl")
+    def test_option_url_failure_returns_none(self, fetch):
+        fetch.return_value = None
+        core = ModernSpiderFoot(self._options())
+        try:
+            self.assertIsNone(core.optValueToData("https://example.com/config.txt"))
         finally:
             core.close()
 
