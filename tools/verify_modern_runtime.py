@@ -2,9 +2,9 @@
 """Verify MooSight's modern runtime routing and security invariants.
 
 This check is intentionally local and network-free. It proves that the normal
-MooSight entry point routes core and scanner construction through modern
-compatibility facades and that constructing the core does not leave process-wide
-HTTPS or DNS/socket behavior modified.
+MooSight entry point routes core, scanner, and web-UI construction through
+modern compatibility facades and that constructing the core does not leave
+process-wide HTTPS or DNS/socket behavior modified.
 """
 
 from __future__ import annotations
@@ -17,9 +17,11 @@ from typing import Callable
 import moosight
 import sf
 import sfscan
+import sfwebui
 from spiderfoot.modern_core import ModernSpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
 from spiderfoot.modern_scanner import ModernSpiderFootScanner
+from spiderfoot.modern_webui import ModernSpiderFootWebUi
 
 
 _SOCKET_RESOLVER_FUNCTIONS = (
@@ -64,6 +66,18 @@ def verify_runtime() -> list[Check]:
         sfscan.SpiderFootScanner is ModernSpiderFootScanner,
         "scanner construction is routed to ModernSpiderFootScanner",
         "scanner construction is not routed to ModernSpiderFootScanner",
+    ))
+    checks.append(_result(
+        "web UI facade routing",
+        sf.SpiderFootWebUi is ModernSpiderFootWebUi,
+        "web UI construction is routed to ModernSpiderFootWebUi",
+        "web UI construction is not routed to ModernSpiderFootWebUi",
+    ))
+    checks.append(_result(
+        "web UI core routing",
+        sfwebui.SpiderFoot is ModernSpiderFoot,
+        "sfwebui.py core construction is routed to ModernSpiderFoot",
+        "sfwebui.py still constructs the legacy SpiderFoot core",
     ))
 
     mro = ModernSpiderFoot.__mro__
