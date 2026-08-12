@@ -34,6 +34,45 @@ class TestTypedConfiguration(unittest.TestCase):
         })
         self.assertEqual(config.proxy_url(), "socks5h://127.0.0.1:9050")
 
+    def test_proxy_types_receive_legacy_default_ports(self):
+        expected = {
+            "4": (1080, "socks4://proxy.example:1080"),
+            "5": (1080, "socks5://proxy.example:1080"),
+            "HTTP": (8080, "http://proxy.example:8080"),
+            "TOR": (9050, "socks5h://proxy.example:9050"),
+        }
+        for proxy_type, (port, url) in expected.items():
+            with self.subTest(proxy_type=proxy_type):
+                config = NetworkConfig.from_legacy({
+                    "_socks1type": proxy_type,
+                    "_socks2addr": "proxy.example",
+                })
+                self.assertEqual(config.proxy_port, port)
+                self.assertTrue(config.proxy_enabled)
+                self.assertEqual(config.proxy_url(), url)
+
+    def test_proxy_type_requires_host(self):
+        for proxy_type in ("4", "5", "HTTP", "TOR"):
+            with self.subTest(proxy_type=proxy_type):
+                with self.assertRaises(ValueError):
+                    NetworkConfig.from_legacy({"_socks1type": proxy_type})
+
+    def test_proxy_password_requires_username(self):
+        with self.assertRaises(ValueError):
+            NetworkConfig.from_legacy({
+                "_socks1type": "5",
+                "_socks2addr": "127.0.0.1",
+                "_socks5pwd": "secret",
+            })
+
+    def test_proxy_username_without_password_is_supported(self):
+        config = NetworkConfig.from_legacy({
+            "_socks1type": "HTTP",
+            "_socks2addr": "proxy.example",
+            "_socks4user": "user name",
+        })
+        self.assertEqual(config.proxy_url(), "http://user%20name@proxy.example:8080")
+
     def test_invalid_proxy_type_is_rejected(self):
         with self.assertRaises(ValueError):
             NetworkConfig.from_legacy({"_socks1type": "INVALID"})
