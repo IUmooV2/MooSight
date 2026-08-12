@@ -1,7 +1,7 @@
 import unittest
 
 from spiderfoot.network import NetworkResult, NetworkState
-from spiderfoot.network_legacy import empty_legacy_result, network_result_to_legacy
+from spiderfoot.network_legacy import empty_legacy_result, network_result_to_legacy, to_legacy_result
 
 
 class TestLegacyNetworkAdapter(unittest.TestCase):
@@ -67,6 +67,22 @@ class TestLegacyNetworkAdapter(unittest.TestCase):
         legacy = network_result_to_legacy(result)
         self.assertEqual(legacy["content"], binary)
 
+    def test_to_legacy_result_preserves_requested_url_when_result_has_none(self):
+        result = NetworkResult(state=NetworkState.NETWORK_ERROR, url=None)
+        legacy = to_legacy_result(result, requested_url="https://example.com/")
+        self.assertEqual(legacy["realurl"], "https://example.com/")
+
+    def test_to_legacy_result_honors_disable_content_encoding(self):
+        binary = b"hello"
+        result = NetworkResult(
+            state=NetworkState.SUCCESS,
+            status_code=200,
+            url="https://example.com/file",
+            content=binary,
+        )
+        legacy = to_legacy_result(result, disable_content_encoding=True)
+        self.assertEqual(legacy["content"], binary)
+
     def test_empty_result_is_fresh_each_time(self):
         first = empty_legacy_result("https://one.example/")
         second = empty_legacy_result("https://two.example/")
@@ -79,3 +95,7 @@ class TestLegacyNetworkAdapter(unittest.TestCase):
     def test_wrong_type_is_rejected(self):
         with self.assertRaises(TypeError):
             network_result_to_legacy({})
+
+
+if __name__ == "__main__":
+    unittest.main()
