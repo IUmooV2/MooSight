@@ -54,6 +54,7 @@ class sfp_accounts(SpiderFootPlugin):
     results = None
     reportedUsers = list()
     siteResults = dict()
+    siteHealth = dict()
     sites = list()
     errorState = False
     distrustedChecked = False
@@ -65,6 +66,7 @@ class sfp_accounts(SpiderFootPlugin):
         self.commonNames = list()
         self.reportedUsers = list()
         self.siteResults = dict()
+        self.siteHealth = dict()
         self.sites = list()
         self.errorState = False
         self.distrustedChecked = False
@@ -139,11 +141,6 @@ class sfp_accounts(SpiderFootPlugin):
 
     @staticmethod
     def _confidence(site):
-        """Return evidence strength for a positive username-existence match.
-
-        Confidence describes the quality of the site's detection fingerprint,
-        not whether the researched person owns the account.
-        """
         expected = bool(site.get('e_string'))
         missing = bool(site.get('m_string'))
         expected_code = site.get('e_code')
@@ -168,6 +165,27 @@ class sfp_accounts(SpiderFootPlugin):
             f"<SFURL>{ret_url}</SFURL>"
         )
 
+    def _record_site_health(self, site, status, detail=None):
+        """Record one site's behavior for diagnostics and quality filtering."""
+        name = str(site.get('name') or 'unknown')
+        with self.lock:
+            record = self.siteHealth.setdefault(name, {
+                'positive': 0,
+                'negative': 0,
+                'error': 0,
+                'ambiguous': 0,
+                'last_detail': None,
+            })
+            if status in record:
+                record[status] += 1
+            if detail:
+                record['last_detail'] = str(detail)[:240]
+
+    def _set_site_result(self, retname, found, site, status, detail=None):
+        with self.lock:
+            self.siteResults[retname] = found
+        self._record_site_health(site, status, detail)
+
     def checkSite(self, name, site):
         name = self._normalize_username(name)
         if not name:
@@ -176,10 +194,12 @@ class sfp_accounts(SpiderFootPlugin):
         try:
             url = site['uri_check'].format(account=name)
             ret_url = site.get('uri_pretty', site['uri_check']).format(account=name)
-        except (KeyError, ValueError, IndexError):
+        except (KeyError, ValueError, IndexError) as exc:
+            self._record_site_health(site, 'error', f'invalid dataset URL template: {exc}')
             return
 
         if not self._host(url) or not url.lower().startswith(('http://', 'https://')):
+            self._record_site_health(site, 'error', 'invalid or unsupported check URL')
             return
 
         retname = self._result_text(site, ret_url)
@@ -189,19 +209,22 @@ class sfp_accounts(SpiderFootPlugin):
             for key, value in (site.get('headers') or {}).items()
         }
 
-        res = self.sf.fetchUrl(
-            url,
-            postData=post,
-            headers=headers or None,
-            timeout=self.opts['_fetchtimeout'],
-            useragent=self.opts['_useragent'],
-            noLog=True,
-            verify=bool(self.opts.get('allow_insecure_tls', False)) is False
-        )
+        try:
+            res = self.sf.fetchUrl(
+                url,
+                postData=post,
+                headers=headers or None,
+                timeout=self.opts['_fetchtimeout'],
+                useragent=self.opts['_useragent'],
+                noLog=True,
+                verify=bool(self.opts.get('allow_insecure_tls', False)) is False
+            )
+        except Exception as exc:
+            self._set_site_result(retname, False, site, 'error', f'network exception: {exc}')
+            return
 
         if not res:
-            with self.lock:
-                self.siteResults[retname] = False
+            self._set_site_result(retname, False, site, 'error', 'no response')
             return
 
         content = res.get('content')
@@ -211,27 +234,28 @@ class sfp_accounts(SpiderFootPlugin):
             content = str(content)
 
         code = str(res.get('code') or '')
-        if not content:
-            with self.lock:
-                self.siteResults[retname] = False
+        if content is None:
+            self._set_site_result(retname, False, site, 'error', f'empty response body; HTTP {code or "unknown"}')
             return
 
         expected_code = site.get('e_code')
         missing_code = site.get('m_code')
-        if expected_code != missing_code and code != str(expected_code):
-            with self.lock:
-                self.siteResults[retname] = False
-            return
-
         expected = site.get('e_string')
         missing = site.get('m_string')
-        if expected and expected not in content:
-            with self.lock:
-                self.siteResults[retname] = False
-            return
+
         if missing and missing in content:
-            with self.lock:
-                self.siteResults[retname] = False
+            self._set_site_result(retname, False, site, 'negative', 'known missing-account fingerprint matched')
+            return
+
+        if expected_code != missing_code and code != str(expected_code):
+            if missing_code is not None and code == str(missing_code):
+                self._set_site_result(retname, False, site, 'negative', f'known missing-account HTTP status {code}')
+            else:
+                self._set_site_result(retname, False, site, 'ambiguous', f'unexpected HTTP status {code or "unknown"}')
+            return
+
+        if expected and expected not in content:
+            self._set_site_result(retname, False, site, 'ambiguous', 'expected positive fingerprint absent')
             return
 
         if self.opts['musthavename'] and not expected:
@@ -239,12 +263,10 @@ class sfp_accounts(SpiderFootPlugin):
             textual = not ctype or any(t in ctype for t in ('text/', 'json', 'javascript', 'xml'))
             if textual and name.lower() not in content.lower():
                 self.debug(f"Skipping {site['name']} because the username was not present in the response.")
-                with self.lock:
-                    self.siteResults[retname] = False
+                self._set_site_result(retname, False, site, 'ambiguous', 'username absent from heuristic response')
                 return
 
-        with self.lock:
-            self.siteResults[retname] = True
+        self._set_site_result(retname, True, site, 'positive')
 
     def checkSites(self, username, sites=None):
         username = self._normalize_username(username)
@@ -260,12 +282,14 @@ class sfp_accounts(SpiderFootPlugin):
                 try:
                     self.checkSite(username, site)
                 except Exception as exc:
+                    self._record_site_health(site, 'error', f'worker exception: {exc}')
                     self.debug(f'Thread {threading.current_thread().name} exception: {exc}')
                 finally:
                     queue.task_done()
 
         startTime = time.monotonic()
         self.siteResults = {}
+        self.siteHealth = {}
         sites = self.sites if sites is None else sites
         queue = Queue()
         for site in sites:
@@ -283,7 +307,16 @@ class sfp_accounts(SpiderFootPlugin):
             thread.join(timeout=0.5)
 
         duration = max(time.monotonic() - startTime, 0.001)
-        self.debug(f'Scan statistics: name={username}, sites={len(sites)}, responses={len(self.siteResults)}, duration={duration:.2f}, rate={len(sites) / duration:.0f}')
+        health_counts = {
+            key: sum(record.get(key, 0) for record in self.siteHealth.values())
+            for key in ('positive', 'negative', 'ambiguous', 'error')
+        }
+        self.debug(
+            f"Scan statistics: name={username}, sites={len(sites)}, responses={len(self.siteResults)}, "
+            f"positive={health_counts['positive']}, negative={health_counts['negative']}, "
+            f"ambiguous={health_counts['ambiguous']}, errors={health_counts['error']}, "
+            f"duration={duration:.2f}, rate={len(sites) / duration:.0f}"
+        )
         return sorted([site for site, found in self.siteResults.items() if found])
 
     def generatePermutations(self, username):
@@ -310,7 +343,7 @@ class sfp_accounts(SpiderFootPlugin):
         self.results[eventData] = True
 
         if not self.distrustedChecked:
-            content = self.sf.cacheGet("sfaccounts_state_v4", 24)
+            content = self.sf.cacheGet("sfaccounts_state_v5", 24)
             if content:
                 if content != "None":
                     distrusted = [line for line in content.split("\n") if line]
@@ -326,9 +359,9 @@ class sfp_accounts(SpiderFootPlugin):
                         self.debug(f"Distrusting {sitename}: it matched a random username.")
                         distrusted.append(sitename)
                     self.sites = [d for d in self.sites if d['name'] not in distrusted]
-                    self.sf.cachePut("sfaccounts_state_v4", "\n".join(distrusted))
+                    self.sf.cachePut("sfaccounts_state_v5", "\n".join(distrusted))
                 else:
-                    self.sf.cachePut("sfaccounts_state_v4", "None")
+                    self.sf.cachePut("sfaccounts_state_v5", "None")
             self.distrustedChecked = True
 
         if eventName == "HUMAN_NAME":
