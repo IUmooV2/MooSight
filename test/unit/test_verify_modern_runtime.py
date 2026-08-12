@@ -4,9 +4,11 @@ import unittest
 
 import sf
 import sfscan
+import sfwebui
 
 from spiderfoot.modern_core import ModernSpiderFoot
 from spiderfoot.modern_scanner import ModernSpiderFootScanner
+from spiderfoot.modern_webui import ModernSpiderFootWebUi
 from tools.verify_modern_runtime import verify_runtime
 
 
@@ -39,6 +41,8 @@ class TestModernRuntimeVerifier(unittest.TestCase):
         self.assertIs(sf.SpiderFoot, ModernSpiderFoot)
         self.assertIs(sfscan.SpiderFoot, ModernSpiderFoot)
         self.assertIs(sfscan.SpiderFootScanner, ModernSpiderFootScanner)
+        self.assertIs(sf.SpiderFootWebUi, ModernSpiderFootWebUi)
+        self.assertIs(sfwebui.SpiderFoot, ModernSpiderFoot)
 
     def test_runtime_verifier_includes_global_resolver_check(self):
         checks = verify_runtime()
@@ -51,6 +55,12 @@ class TestModernRuntimeVerifier(unittest.TestCase):
         by_name = {check.name: check for check in checks}
         self.assertIn("scanner facade routing", by_name)
         self.assertTrue(by_name["scanner facade routing"].ok)
+
+    def test_runtime_verifier_includes_web_ui_checks(self):
+        checks = verify_runtime()
+        by_name = {check.name: check for check in checks}
+        self.assertTrue(by_name["web UI facade routing"].ok)
+        self.assertTrue(by_name["web UI core routing"].ok)
 
     def test_check_names_are_unique(self):
         checks = verify_runtime()
