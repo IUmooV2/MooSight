@@ -10,7 +10,10 @@ transport stack before deleting the large legacy networking block from sflib.
 from __future__ import annotations
 
 import logging
+import socket
 from copy import deepcopy
+
+import netaddr
 
 from sflib import SpiderFoot as LegacySpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
@@ -86,6 +89,56 @@ class ModernSpiderFoot(ModernNetworkMixin, LegacySpiderFoot):
             return str(content)
 
         return val
+
+    def validIpNetwork(self, cidr: str) -> bool:
+        """Validate CIDR input without catching process-control exceptions."""
+        if not isinstance(cidr, str) or "/" not in cidr:
+            return False
+        try:
+            return netaddr.IPNetwork(cidr).size > 0
+        except (netaddr.AddrFormatError, ValueError, TypeError):
+            return False
+
+    def resolveHost(self, host: str) -> list:
+        """Resolve IPv4 addresses while preserving interrupts and exits."""
+        if not host:
+            self.error(f"Unable to resolve host: {host} (Invalid host)")
+            return []
+        try:
+            addrs = self.normalizeDNS(socket.gethostbyname_ex(host))
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.debug(f"Unable to resolve host: {host} ({exc})")
+            return []
+        return list(set(addrs)) if addrs else []
+
+    def resolveIP(self, ipaddr: str) -> list:
+        """Reverse-resolve an IP without swallowing process-control exceptions."""
+        if not self.validIP(ipaddr) and not self.validIP6(ipaddr):
+            self.error(f"Unable to reverse resolve {ipaddr} (Invalid IP address)")
+            return []
+        try:
+            addrs = self.normalizeDNS(socket.gethostbyaddr(ipaddr))
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.debug(f"Unable to reverse resolve IP address: {ipaddr} ({exc})")
+            return []
+        return list(set(addrs)) if addrs else []
+
+    def resolveHost6(self, hostname: str) -> list:
+        """Resolve IPv6 addresses without broad BaseException handling."""
+        if not hostname:
+            self.error(f"Unable to resolve host: {hostname} (Invalid host)")
+            return []
+
+        addrs: list[str] = []
+        try:
+            for addr in socket.getaddrinfo(hostname, None, socket.AF_INET6):
+                resolved = addr[4][0]
+                if resolved not in addrs:
+                    addrs.append(resolved)
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.debug(f"Unable to resolve host: {hostname} ({exc})")
+            return []
+        return addrs
 
     def close(self) -> None:
         """Release resources owned by the modern core facade."""
