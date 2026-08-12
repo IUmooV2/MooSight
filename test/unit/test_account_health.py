@@ -6,6 +6,7 @@ from spiderfoot.account_health import (
     merge_health,
     normalize_health,
     reliability,
+    reliability_text,
 )
 
 
@@ -53,6 +54,13 @@ class TestAccountHealth(unittest.TestCase):
         unstable, _, _ = reliability({'positive': 1, 'negative': 2, 'ambiguous': 5, 'error': 5})
         self.assertEqual(mixed, 'MIXED')
         self.assertEqual(unstable, 'UNSTABLE')
+
+    def test_reliability_text_handles_new_and_historical_sites(self):
+        self.assertEqual(reliability_text(None), 'NEW (no history)')
+        text = reliability_text({'positive': 8, 'negative': 20, 'ambiguous': 1, 'error': 0})
+        self.assertIn('HEALTHY', text)
+        self.assertIn('29 observations', text)
+        self.assertIn('%', text)
 
     def test_serialization_is_deterministic_and_corruption_safe(self):
         payload = dumps_health({
