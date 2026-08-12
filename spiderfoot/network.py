@@ -20,6 +20,7 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from spiderfoot.config import NetworkConfig
 from spiderfoot.security import redact_url
 
 
@@ -113,6 +114,24 @@ def build_session(
             "https": proxy_url,
         })
     return session
+
+
+def build_session_from_config(
+    config: NetworkConfig,
+    *,
+    retries: int = 2,
+    backoff_factor: float = 0.25,
+    retry_statuses: Sequence[int] = (429, 500, 502, 503, 504),
+) -> requests.Session:
+    """Create an isolated session directly from validated network settings."""
+    if not isinstance(config, NetworkConfig):
+        raise TypeError("config must be a NetworkConfig")
+    return build_session(
+        config.proxy_url(),
+        retries=retries,
+        backoff_factor=backoff_factor,
+        retry_statuses=retry_statuses,
+    )
 
 
 def classify_http_status(status_code: int | None) -> NetworkState:
@@ -223,4 +242,44 @@ def request_url(
         content=content,
         headers=headers_out,
         tls_verified=verify,
+    )
+
+
+def request_with_config(
+    config: NetworkConfig,
+    method: str,
+    url: str,
+    *,
+    session: requests.Session | None = None,
+    verify: bool = True,
+    headers: Mapping[str, str] | None = None,
+    cookies=None,
+    data=None,
+    allow_redirects: bool = True,
+    size_limit: int | None = None,
+) -> NetworkResult:
+    """Perform a request using validated network defaults.
+
+    A caller may supply an existing session to retain connection pooling across
+    requests. When omitted, a correctly configured isolated session is created.
+    """
+    if not isinstance(config, NetworkConfig):
+        raise TypeError("config must be a NetworkConfig")
+
+    request_headers = {str(k): str(v) for k, v in (headers or {}).items()}
+    if not any(key.lower() == "user-agent" for key in request_headers):
+        request_headers["User-Agent"] = config.user_agent
+
+    active_session = session or build_session_from_config(config)
+    return request_url(
+        active_session,
+        method,
+        url,
+        timeout=config.timeout,
+        verify=verify,
+        headers=request_headers,
+        cookies=cookies,
+        data=data,
+        allow_redirects=allow_redirects,
+        size_limit=size_limit,
     )
