@@ -27,11 +27,28 @@ class Finding:
     detail: str
 
 
-def _handler_name(handler_type: ast.expr | None) -> str | None:
+def _exception_names(handler_type: ast.expr | None) -> tuple[str, ...] | None:
+    """Return exception type names for a handler.
+
+    ``None`` is reserved exclusively for a true bare ``except:``. Tuple
+    handlers are flattened so ``except (ValueError, TypeError)`` is not
+    accidentally classified as bare, while tuples containing ``Exception`` or
+    ``BaseException`` are still recognized correctly.
+    """
     if handler_type is None:
         return None
+
+    if isinstance(handler_type, ast.Tuple):
+        names: list[str] = []
+        for element in handler_type.elts:
+            element_names = _exception_names(element)
+            if element_names:
+                names.extend(element_names)
+        return tuple(names)
+
     if isinstance(handler_type, ast.Name):
-        return handler_type.id
+        return (handler_type.id,)
+
     if isinstance(handler_type, ast.Attribute):
         parts: list[str] = []
         node: ast.expr = handler_type
@@ -40,8 +57,11 @@ def _handler_name(handler_type: ast.expr | None) -> str | None:
             node = node.value
         if isinstance(node, ast.Name):
             parts.append(node.id)
-        return ".".join(reversed(parts)) if parts else None
-    return None
+        return (".".join(reversed(parts)),) if parts else ()
+
+    # Dynamic or otherwise unusual exception expressions are not bare catches.
+    # Leave them unclassified instead of producing a false positive.
+    return ()
 
 
 def audit_source(source: str, path: str = "<memory>") -> list[Finding]:
@@ -52,12 +72,14 @@ def audit_source(source: str, path: str = "<memory>") -> list[Finding]:
         if not isinstance(node, ast.ExceptHandler):
             continue
 
-        name = _handler_name(node.type)
-        if name is None:
+        names = _exception_names(node.type)
+        if names is None:
             findings.append(Finding(path, node.lineno, "bare-except", "bare except catches process-control exceptions"))
-        elif name == "BaseException" or name.endswith(".BaseException"):
+            continue
+
+        if any(name == "BaseException" or name.endswith(".BaseException") for name in names):
             findings.append(Finding(path, node.lineno, "base-exception", "BaseException catches KeyboardInterrupt and SystemExit"))
-        elif name == "Exception" or name.endswith(".Exception"):
+        elif any(name == "Exception" or name.endswith(".Exception") for name in names):
             findings.append(Finding(path, node.lineno, "broad-exception", "broad Exception handler should be reviewed and narrowed when practical"))
 
     return sorted(findings)
