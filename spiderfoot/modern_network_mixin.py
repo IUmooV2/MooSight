@@ -12,10 +12,8 @@ urllib3 warning filters.
 
 from __future__ import annotations
 
-import ipaddress
 import socket
 from typing import Any
-from urllib.parse import urlparse
 
 from spiderfoot.config import NetworkConfig
 from spiderfoot.http_client import HttpClient
@@ -114,36 +112,8 @@ class ModernNetworkMixin:
         return create_tls_socket(host, port, timeout, verify=verify)
 
     def useProxyForUrl(self, url: str) -> bool:
-        """Return whether the configured proxy should handle a URL.
-
-        The decision is based on validated ``NetworkConfig`` rather than direct
-        magic-key lookups. Loopback, private, link-local and local hostnames are
-        kept off the proxy, as is the proxy server itself.
-        """
-        config = self._network_config()
-        if not config.proxy_enabled:
-            return False
-        if not isinstance(url, str) or not url.strip():
-            return False
-
-        parsed = urlparse(url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return False
-
-        host = parsed.hostname.rstrip(".").lower()
-        if host == config.proxy_host.rstrip(".").lower():
-            return False
-        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
-            return False
-
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            return True
-
-        if address.is_private or address.is_loopback or address.is_link_local:
-            return False
-        return True
+        """Return whether the validated network configuration proxies a URL."""
+        return self._network_config().should_proxy_url(url)
 
     def fetchUrl(
         self,
