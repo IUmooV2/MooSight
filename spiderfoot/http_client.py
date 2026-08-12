@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Mapping, Any
 
 from spiderfoot.config import NetworkConfig
-from spiderfoot.network import NetworkResult, build_session_from_config, request_with_config
+from spiderfoot.network import NetworkResult, build_session, build_session_from_config, request_with_config
 from spiderfoot.network_legacy import to_legacy_result
 
 
@@ -51,20 +51,35 @@ class HttpClient:
         allow_redirects: bool = True,
         size_limit: int | None = None,
     ) -> NetworkResult:
-        """Perform one normalized request using this client's isolated session."""
-        return request_with_config(
-            self.config,
-            method,
-            url,
-            session=self._session,
-            timeout=timeout,
-            verify=verify,
-            headers=headers,
-            cookies=cookies,
-            data=data,
-            allow_redirects=allow_redirects,
-            size_limit=size_limit,
-        )
+        """Perform one normalized request using this client's isolated session.
+
+        When a proxy is configured, local/private targets deliberately use a
+        short-lived direct session. This preserves SpiderFoot's historical proxy
+        bypass behavior without mutating the reusable proxied session.
+        """
+        direct_session = None
+        active_session = self._session
+        if self.config.proxy_enabled and not self.config.should_proxy_url(url):
+            direct_session = build_session()
+            active_session = direct_session
+
+        try:
+            return request_with_config(
+                self.config,
+                method,
+                url,
+                session=active_session,
+                timeout=timeout,
+                verify=verify,
+                headers=headers,
+                cookies=cookies,
+                data=data,
+                allow_redirects=allow_redirects,
+                size_limit=size_limit,
+            )
+        finally:
+            if direct_session is not None:
+                direct_session.close()
 
     def get(self, url: str, **kwargs) -> NetworkResult:
         return self.request("GET", url, **kwargs)
