@@ -6,14 +6,17 @@ from unittest.mock import Mock
 import requests
 import urllib3
 
+from spiderfoot.config import NetworkConfig
 from spiderfoot.network import (
     NetworkResult,
     NetworkState,
     ScopedInsecureRequestWarnings,
     build_session,
+    build_session_from_config,
     classify_exception,
     classify_http_status,
     request_url,
+    request_with_config,
 )
 
 
@@ -55,6 +58,23 @@ class TestNetworkPrimitives(unittest.TestCase):
         self.assertIsInstance(session, requests.Session)
         self.assertEqual(session.proxies["http"], "socks5://127.0.0.1:9050")
         self.assertEqual(session.proxies["https"], "socks5://127.0.0.1:9050")
+
+    def test_build_session_from_config_uses_validated_proxy(self):
+        config = NetworkConfig.from_legacy({
+            "_socks1type": "5",
+            "_socks2addr": "127.0.0.1",
+            "_socks3port": "9050",
+            "_socks4user": "alice",
+            "_socks5pwd": "p@ss word",
+        })
+        session = build_session_from_config(config)
+        expected = "socks5://alice:p%40ss%20word@127.0.0.1:9050"
+        self.assertEqual(session.proxies["http"], expected)
+        self.assertEqual(session.proxies["https"], expected)
+
+    def test_build_session_from_config_rejects_wrong_type(self):
+        with self.assertRaises(TypeError):
+            build_session_from_config({})
 
     def test_build_session_does_not_mutate_default_ssl_context(self):
         before = ssl._create_default_https_context
@@ -179,3 +199,34 @@ class TestNetworkPrimitives(unittest.TestCase):
         session = requests.Session()
         with self.assertRaises(ValueError):
             request_url(session, "TRACE", "https://example.com/")
+
+    def test_request_with_config_applies_timeout_and_default_user_agent(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        result = request_with_config(config, "GET", "https://example.com/", session=session)
+
+        self.assertTrue(result.ok)
+        kwargs = session.request.call_args.kwargs
+        self.assertEqual(kwargs["timeout"], 7)
+        self.assertEqual(kwargs["headers"]["User-Agent"], "MooSight-Test")
+
+    def test_request_with_config_preserves_explicit_user_agent(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        request_with_config(
+            config,
+            "GET",
+            "https://example.com/",
+            session=session,
+            headers={"user-agent": "Custom-Agent"},
+        )
+
+        headers = session.request.call_args.kwargs["headers"]
+        self.assertEqual(headers["user-agent"], "Custom-Agent")
+        self.assertNotIn("User-Agent", headers)
+
+    def test_request_with_config_rejects_wrong_type(self):
+        with self.assertRaises(TypeError):
+            request_with_config({}, "GET", "https://example.com/")
