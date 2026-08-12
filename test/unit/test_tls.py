@@ -3,7 +3,7 @@ import ssl
 import unittest
 from unittest.mock import Mock, patch
 
-from spiderfoot.tls import TLSSettings, create_tls_context, open_tcp_socket, open_tls_socket
+from spiderfoot.tls import TLSSettings, create_tls_context, create_tls_socket, open_tcp_socket, open_tls_socket
 
 
 class TestTLSHelpers(unittest.TestCase):
@@ -76,3 +76,16 @@ class TestTLSHelpers(unittest.TestCase):
     def test_open_tls_socket_rejects_wrong_settings_type(self):
         with self.assertRaises(TypeError):
             open_tls_socket('example.com', 443, settings={})
+
+    @patch('spiderfoot.tls.open_tls_socket')
+    def test_create_tls_socket_preserves_mixin_calling_convention(self, open_socket):
+        wrapped = Mock(spec=ssl.SSLSocket)
+        open_socket.return_value = wrapped
+
+        result = create_tls_socket('example.com', 443, 4.5, verify=False)
+
+        self.assertIs(result, wrapped)
+        settings = open_socket.call_args.kwargs['settings']
+        self.assertEqual(settings.timeout, 4.5)
+        self.assertFalse(settings.verify)
+        self.assertEqual(settings.server_hostname, 'example.com')
