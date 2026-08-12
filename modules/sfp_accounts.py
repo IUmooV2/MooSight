@@ -71,8 +71,6 @@ class sfp_accounts(SpiderFootPlugin):
         self.__dataSource__ = "Social Media"
         self.lock = threading.Lock()
 
-        # Own a per-instance options dictionary rather than mutating the class
-        # defaults shared by future module instances.
         self.opts = dict(type(self).opts)
         for opt in list(userOpts.keys()):
             self.opts[opt] = userOpts[opt]
@@ -80,8 +78,6 @@ class sfp_accounts(SpiderFootPlugin):
         self.commonNames = SpiderFootHelpers.humanNamesFromWordlists()
         self.words = SpiderFootHelpers.dictionaryWordsFromWordlists()
 
-        # Keep this cache short enough that WhatsMyName fixes/new services arrive
-        # promptly without downloading the dataset on every scan.
         content = self.sf.cacheGet("sfaccountsv3", 12)
         if content is None:
             url = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
@@ -129,7 +125,6 @@ class sfp_accounts(SpiderFootPlugin):
 
     @staticmethod
     def _header(headers, name):
-        """Return a response header value without assuming header casing."""
         wanted = name.lower()
         for key, value in (headers or {}).items():
             if str(key).lower() == wanted:
@@ -138,10 +133,40 @@ class sfp_accounts(SpiderFootPlugin):
 
     @staticmethod
     def _format_site_value(value, account):
-        """Format optional WhatsMyName request values safely."""
         if not isinstance(value, str):
             return value
         return value.replace('{account}', account)
+
+    @staticmethod
+    def _confidence(site):
+        """Return evidence strength for a positive username-existence match.
+
+        Confidence describes the quality of the site's detection fingerprint,
+        not whether the researched person owns the account.
+        """
+        expected = bool(site.get('e_string'))
+        missing = bool(site.get('m_string'))
+        expected_code = site.get('e_code')
+        missing_code = site.get('m_code')
+
+        if expected and missing:
+            return "HIGH", "site-specific positive and negative fingerprints matched"
+        if expected and expected_code is not None:
+            return "MEDIUM", "site-specific positive fingerprint and HTTP status matched"
+        if missing and expected_code is not None and expected_code != missing_code:
+            return "MEDIUM", "HTTP status matched and known missing-page fingerprint was absent"
+        return "LOW", "HTTP response and username-presence heuristic matched"
+
+    @staticmethod
+    def _result_text(site, ret_url):
+        confidence, evidence = sfp_accounts._confidence(site)
+        return (
+            f"{site['name']} (Category: {site.get('cat', 'unknown')})\n"
+            f"Confidence: {confidence}\n"
+            f"Evidence: {evidence}\n"
+            "Interpretation: username appears to exist on this service; identity/ownership is not established.\n"
+            f"<SFURL>{ret_url}</SFURL>"
+        )
 
     def checkSite(self, name, site):
         name = self._normalize_username(name)
@@ -157,7 +182,7 @@ class sfp_accounts(SpiderFootPlugin):
         if not self._host(url) or not url.lower().startswith(('http://', 'https://')):
             return
 
-        retname = f"{site['name']} (Category: {site.get('cat', 'unknown')})\n<SFURL>{ret_url}</SFURL>"
+        retname = self._result_text(site, ret_url)
         post = self._format_site_value(site.get('post_body'), name)
         headers = {
             str(key): self._format_site_value(value, name)
@@ -209,9 +234,6 @@ class sfp_accounts(SpiderFootPlugin):
                 self.siteResults[retname] = False
             return
 
-        # A positive WhatsMyName fingerprint is already site-specific evidence.
-        # Only use literal username presence as an extra heuristic for entries
-        # that do not define such a fingerprint.
         if self.opts['musthavename'] and not expected:
             ctype = str(self._header(res.get('headers'), 'content-type')).lower()
             textual = not ctype or any(t in ctype for t in ('text/', 'json', 'javascript', 'xml'))
