@@ -10,8 +10,10 @@ custom DNS setup from remaining process-wide while a scan executes.
 from __future__ import annotations
 
 import socket
+from copy import deepcopy
 
 from sfscan import SpiderFootScanner as LegacySpiderFootScanner
+from spiderfoot.config import NetworkConfig
 
 
 _SOCKET_RESOLVER_FUNCTIONS = (
@@ -25,15 +27,7 @@ _SOCKET_RESOLVER_FUNCTIONS = (
 
 
 class ModernSpiderFootScanner(LegacySpiderFootScanner):
-    """Legacy scanner behavior with isolated per-scan mutable state.
-
-    The legacy scanner may ask dnspython to replace process-wide socket resolver
-    functions when a custom DNS server is configured. MooSight forces legacy
-    initialization to complete without starting the scan, restores the process
-    resolver state, and only then starts scanning when requested. This keeps a
-    custom scanner DNS setting from leaking across the entire application while
-    the scan is running.
-    """
+    """Legacy scanner behavior with isolated per-scan mutable state."""
 
     def __init__(
         self,
@@ -45,16 +39,28 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
         globalOpts: dict,
         start: bool = True,
     ) -> None:
-        # These attributes are historically defined as mutable class values in
-        # SpiderFootScanner. Assigning them here guarantees each scanner owns
-        # independent collections even before legacy initialization touches them.
         self._SpiderFootScanner__moduleList = []
         self._SpiderFootScanner__moduleInstances = {}
         self._SpiderFootScanner__modconfig = {}
 
-        # Pass an owned copy because the legacy initializer stores the list by
-        # reference. This prevents scan setup from ever mutating caller state.
         owned_modules = list(moduleList) if isinstance(moduleList, list) else moduleList
+        owned_options = deepcopy(globalOpts) if isinstance(globalOpts, dict) else globalOpts
+
+        # Validate and normalize proxy settings before legacy scanner setup. This
+        # makes the typed configuration the source of truth while retaining the
+        # legacy scanner's expected dictionary interface during the transition.
+        if isinstance(owned_options, dict):
+            network_config = NetworkConfig.from_legacy(owned_options)
+            if network_config.proxy_enabled:
+                owned_options["_socks1type"] = network_config.proxy_type
+                owned_options["_socks2addr"] = network_config.proxy_host
+                owned_options["_socks3port"] = network_config.proxy_port
+                owned_options["_socks4user"] = network_config.proxy_username
+                owned_options["_socks5pwd"] = network_config.proxy_password
+            else:
+                # Keep legacy no-proxy behavior explicit and prevent stale proxy
+                # fields from being interpreted independently downstream.
+                owned_options["_socks1type"] = ""
 
         previous_socket_functions = {
             name: getattr(socket, name)
@@ -63,23 +69,16 @@ class ModernSpiderFootScanner(LegacySpiderFootScanner):
         }
 
         try:
-            # Always suppress legacy auto-start here. The old initializer changes
-            # process-wide DNS resolver functions before reaching its start hook.
-            # We restore those globals first and invoke the already-initialized
-            # scanner afterward when the caller actually requested auto-start.
             super().__init__(
                 scanName,
                 scanId,
                 targetValue,
                 targetType,
                 owned_modules,
-                globalOpts,
+                owned_options,
                 start=False,
             )
         finally:
-            # The legacy scanner calls dns.resolver.override_system_resolver().
-            # Always restore the exact process resolver state after construction,
-            # including when initialization raises.
             for name, function in previous_socket_functions.items():
                 setattr(socket, name, function)
 
