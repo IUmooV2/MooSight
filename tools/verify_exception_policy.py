@@ -13,27 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.exception_audit import Finding, audit_source
+from tools.modern_files import MODERN_PYTHON_FILES
 
-
-MODERN_FILES = (
-    "moosight.py",
-    "spiderfoot/config.py",
-    "spiderfoot/http_client.py",
-    "spiderfoot/legacy_fetch.py",
-    "spiderfoot/modern_core.py",
-    "spiderfoot/modern_network_mixin.py",
-    "spiderfoot/modern_scanner.py",
-    "spiderfoot/network.py",
-    "spiderfoot/network_legacy.py",
-    "spiderfoot/security.py",
-    "spiderfoot/tls.py",
-    "tools/audit_mutable_class_state.py",
-    "tools/audit_security.py",
-    "tools/exception_audit.py",
-    "tools/preflight.py",
-    "tools/verify_modern_runtime.py",
-    "tools/verify_exception_policy.py",
-)
 
 BLOCKING_KINDS = {"bare-except", "base-exception", "audit-error"}
 
@@ -57,7 +38,7 @@ def verify_exception_policy(root: Path) -> PolicyResult:
     findings: list[Finding] = []
     missing: list[str] = []
 
-    for relative in MODERN_FILES:
+    for relative in MODERN_PYTHON_FILES:
         path = root / relative
         if not path.is_file():
             missing.append(relative)
