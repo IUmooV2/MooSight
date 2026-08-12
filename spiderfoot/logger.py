@@ -19,9 +19,19 @@ class SecretRedactionFilter(logging.Filter):
         record.msg = redact_text(record.getMessage())
         record.args = ()
 
-        # Exception text can contain request URLs, headers, or credential-bearing
-        # configuration values. If an exception has already been rendered by a
-        # previous handler, redact that cached rendering as well.
+        # ``exc_text`` is normally rendered by Formatter *after* filters run.
+        # Pre-render it here so secrets embedded in exception messages or
+        # tracebacks cannot bypass redaction on their way to console, file,
+        # SQLite, or cross-process queue sinks.
+        if getattr(record, "exc_info", None) and not getattr(record, "exc_text", None):
+            try:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            except Exception:
+                # Logging must never fail because traceback rendering failed.
+                # Use a conservative placeholder rather than exposing the raw
+                # exception through a fallback representation.
+                record.exc_text = "[REDACTED EXCEPTION]"
+
         if getattr(record, "exc_text", None):
             record.exc_text = redact_text(record.exc_text)
         return True
