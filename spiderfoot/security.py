@@ -16,8 +16,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _REDACTED = "[REDACTED]"
 
-# Names commonly used for credentials or sensitive session material in URLs,
-# headers, settings, and request metadata. Matching is case-insensitive.
 _SENSITIVE_NAMES = {
     "access_token",
     "api-key",
@@ -79,8 +77,6 @@ def redact_cookies(cookies: Any) -> str:
         names = sorted(str(name) for name in cookies.keys())
         return "{" + ", ".join(f"{name}={_REDACTED}" for name in names) + "}"
 
-    # Cookie strings can contain arbitrary service-specific values. Preserve
-    # names only when they are straightforward name=value pairs.
     parts = []
     for segment in str(cookies).split(";"):
         segment = segment.strip()
@@ -92,65 +88,87 @@ def redact_cookies(cookies: Any) -> str:
     return "; ".join(parts) if parts else _REDACTED
 
 
+def _safe_endpoint(parsed) -> tuple[str, str] | None:
+    """Return a safe scheme/host endpoint or None for malformed netloc data."""
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except (ValueError, UnicodeError):
+        return None
+
+    if not parsed.scheme or not hostname:
+        return None
+
+    host = hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
+    return parsed.scheme, host
+
+
 def redact_proxy(proxy_url: Any) -> str:
-    """Remove user information from a proxy URL while retaining endpoint data."""
+    """Remove user information from a proxy URL while retaining endpoint data.
+
+    Malformed proxy URLs fail closed. Redaction code is commonly executed while
+    handling another error and must never raise or echo potentially sensitive
+    malformed input back into logs.
+    """
     if not proxy_url:
         return "None"
 
-    value = str(proxy_url)
     try:
-        parsed = urlsplit(value)
-    except ValueError:
+        parsed = urlsplit(str(proxy_url))
+        endpoint = _safe_endpoint(parsed)
+    except (ValueError, UnicodeError):
         return _REDACTED
 
-    if not parsed.scheme or not parsed.hostname:
+    if endpoint is None:
         return _REDACTED
 
-    host = parsed.hostname
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    if parsed.port:
-        host = f"{host}:{parsed.port}"
+    scheme, host = endpoint
+    try:
+        has_credentials = parsed.username is not None or parsed.password is not None
+    except (ValueError, UnicodeError):
+        return _REDACTED
 
-    # If credentials were present, signal that fact without reproducing them.
-    if parsed.username is not None or parsed.password is not None:
+    if has_credentials:
         host = f"{_REDACTED}@{host}"
 
-    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+    return urlunsplit((scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
 def redact_url(url: Any) -> str:
-    """Redact URL userinfo and sensitive query parameters.
-
-    The function is conservative: malformed URLs are passed through a final
-    bearer/basic-token scrub rather than raising from logging code.
-    """
+    """Redact URL userinfo and sensitive query parameters without raising."""
     if not url:
         return str(url)
 
     value = str(url)
     try:
         parsed = urlsplit(value)
-    except ValueError:
-        return _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", value)
+        endpoint = _safe_endpoint(parsed) if parsed.netloc else None
+    except (ValueError, UnicodeError):
+        return _REDACTED
 
     netloc = parsed.netloc
-    if parsed.hostname:
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        if parsed.username is not None or parsed.password is not None:
-            netloc = f"{_REDACTED}@{host}"
-        else:
-            netloc = host
+    if parsed.netloc:
+        if endpoint is None:
+            return _REDACTED
+        _, host = endpoint
+        try:
+            has_credentials = parsed.username is not None or parsed.password is not None
+        except (ValueError, UnicodeError):
+            return _REDACTED
+        netloc = f"{_REDACTED}@{host}" if has_credentials else host
 
-    query = []
-    for key, val in parse_qsl(parsed.query, keep_blank_values=True):
-        query.append((key, _REDACTED if is_sensitive_name(key) else val))
+    try:
+        query = []
+        for key, val in parse_qsl(parsed.query, keep_blank_values=True):
+            query.append((key, _REDACTED if is_sensitive_name(key) else val))
+        safe = urlunsplit((parsed.scheme, netloc, parsed.path, urlencode(query, doseq=True), parsed.fragment))
+    except (ValueError, UnicodeError):
+        return _REDACTED
 
-    safe = urlunsplit((parsed.scheme, netloc, parsed.path, urlencode(query, doseq=True), parsed.fragment))
     return _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", safe)
 
 
@@ -166,27 +184,14 @@ def redact_mapping(values: Mapping | None) -> dict:
 
 
 def redact_text(message: Any) -> str:
-    """Return a defensively redacted representation of arbitrary log text.
-
-    This is a final safety net for messages emitted by legacy modules that may
-    interpolate credentials directly. New code should still redact structured
-    values before formatting them into a log message.
-    """
+    """Return a defensively redacted representation of arbitrary log text."""
     if message is None:
         return "None"
 
     text = str(message)
     text = _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", text)
-
-    # Scrub complete URLs first so query parameters and URL userinfo are handled
-    # using URL-aware parsing rather than only regular expressions.
     text = _URL_RE.sub(lambda m: redact_url(m.group(0)), text)
-
-    # Proxy URLs may use SOCKS schemes, which are outside _URL_RE.
     text = _PROXY_RE.sub(lambda m: redact_proxy(m.group(0)), text)
-
-    # Catch key=value or Header: value strings from legacy modules. This runs
-    # after URL processing so it does not interfere with URL reconstruction.
     text = _SENSITIVE_ASSIGNMENT_RE.sub(
         lambda m: f"{m.group('name')}{m.group('separator')}{_REDACTED}",
         text,
