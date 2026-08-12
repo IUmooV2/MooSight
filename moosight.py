@@ -9,10 +9,20 @@ modern compatibility facades.
 
 from __future__ import annotations
 
-import sf
-import sfscan
-from spiderfoot.modern_core import ModernSpiderFoot
-from spiderfoot.modern_scanner import ModernSpiderFootScanner
+import warnings
+
+# Legacy sflib suppresses urllib3 TLS warnings at import time. Preserve the
+# process warning policy around legacy imports so starting MooSight does not
+# leave that process-wide suppression active.
+_WARNING_FILTERS_BEFORE_LEGACY_IMPORTS = list(warnings.filters)
+try:
+    import sf
+    import sfscan
+    from spiderfoot.modern_core import ModernSpiderFoot
+    from spiderfoot.modern_scanner import ModernSpiderFootScanner
+finally:
+    warnings.filters[:] = _WARNING_FILTERS_BEFORE_LEGACY_IMPORTS
+    del _WARNING_FILTERS_BEFORE_LEGACY_IMPORTS
 
 
 def install_modern_core() -> None:
