@@ -211,6 +211,21 @@ class TestNetworkPrimitives(unittest.TestCase):
         self.assertEqual(kwargs["timeout"], 7)
         self.assertEqual(kwargs["headers"]["User-Agent"], "MooSight-Test")
 
+    def test_request_with_config_honors_explicit_timeout_override(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        result = request_with_config(
+            config,
+            "GET",
+            "https://example.com/",
+            session=session,
+            timeout=2.5,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(session.request.call_args.kwargs["timeout"], 2.5)
+
     def test_request_with_config_preserves_explicit_user_agent(self):
         config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
         session = self._mock_session_response()
