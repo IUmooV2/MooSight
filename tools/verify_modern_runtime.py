@@ -3,12 +3,13 @@
 
 This check is intentionally local and network-free. It proves that the normal
 MooSight entry point routes core construction through ``ModernSpiderFoot`` and
-that constructing the core does not leave Python's process-wide HTTPS context
-weakened.
+that constructing the core does not leave process-wide HTTPS or DNS/socket
+behavior modified.
 """
 
 from __future__ import annotations
 
+import socket
 import ssl
 from dataclasses import dataclass
 from typing import Callable
@@ -18,6 +19,16 @@ import sf
 import sfscan
 from spiderfoot.modern_core import ModernSpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
+
+
+_SOCKET_RESOLVER_FUNCTIONS = (
+    "getaddrinfo",
+    "getnameinfo",
+    "getfqdn",
+    "gethostbyname",
+    "gethostbyname_ex",
+    "gethostbyaddr",
+)
 
 
 @dataclass(frozen=True)
@@ -57,9 +68,16 @@ def verify_runtime() -> list[Check]:
     ))
 
     before_context: Callable = ssl._create_default_https_context
+    before_socket_functions = {
+        name: getattr(socket, name)
+        for name in _SOCKET_RESOLVER_FUNCTIONS
+        if hasattr(socket, name)
+    }
     core = None
     try:
-        core = ModernSpiderFoot({"_dnsserver": ""})
+        # Use a DNS override deliberately so the verifier exercises and detects
+        # the legacy constructor's process-wide resolver mutation path.
+        core = ModernSpiderFoot({"_dnsserver": "1.1.1.1"})
         after_context: Callable = ssl._create_default_https_context
         checks.append(_result(
             "global TLS preservation",
@@ -67,6 +85,18 @@ def verify_runtime() -> list[Check]:
             "constructing ModernSpiderFoot preserves Python's global HTTPS context",
             "constructing ModernSpiderFoot changed Python's global HTTPS context",
         ))
+
+        resolver_preserved = all(
+            getattr(socket, name) is function
+            for name, function in before_socket_functions.items()
+        )
+        checks.append(_result(
+            "global DNS resolver preservation",
+            resolver_preserved,
+            "constructing ModernSpiderFoot preserves process-wide socket resolver functions",
+            "constructing ModernSpiderFoot changed process-wide socket resolver functions",
+        ))
+
         checks.append(_result(
             "modern fetch binding",
             getattr(core.fetchUrl, "__func__", None) is ModernNetworkMixin.fetchUrl,
