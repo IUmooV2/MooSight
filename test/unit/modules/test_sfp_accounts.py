@@ -1,5 +1,6 @@
 import pytest
 import unittest
+from unittest.mock import Mock
 
 from modules.sfp_accounts import sfp_accounts
 from sflib import SpiderFoot
@@ -48,3 +49,104 @@ class TestModuleAccounts(unittest.TestCase):
     def test_checkSites_rejects_invalid_username_without_network_requests(self):
         module = sfp_accounts()
         self.assertEqual(module.checkSites('bad/name', []), [])
+
+    def _module_for_site_check(self, response):
+        module = sfp_accounts()
+        module.sf = Mock()
+        module.sf.fetchUrl.return_value = response
+        module.lock = __import__('threading').Lock()
+        module.siteResults = {}
+        module.opts = {
+            '_fetchtimeout': 5,
+            '_useragent': 'MooSight-Test',
+            'musthavename': True,
+            'allow_insecure_tls': False,
+        }
+        return module
+
+    def test_check_site_verifies_tls_by_default_and_honors_dataset_headers(self):
+        module = self._module_for_site_check({
+            'content': '{"id":1}',
+            'code': '200',
+            'headers': {'Content-Type': 'application/json'},
+        })
+        site = {
+            'name': 'Example',
+            'cat': 'social',
+            'uri_check': 'https://example.com/api/{account}',
+            'uri_pretty': 'https://example.com/{account}',
+            'headers': {'Accept': 'application/json', 'X-User': '{account}'},
+            'e_code': 200,
+            'm_code': 404,
+            'e_string': '"id":',
+            'm_string': 'not found',
+        }
+
+        module.checkSite('alice', site)
+
+        kwargs = module.sf.fetchUrl.call_args.kwargs
+        self.assertTrue(kwargs['verify'])
+        self.assertEqual(kwargs['headers']['Accept'], 'application/json')
+        self.assertEqual(kwargs['headers']['X-User'], 'alice')
+        self.assertTrue(any(module.siteResults.values()))
+
+    def test_check_site_formats_account_in_post_body(self):
+        module = self._module_for_site_check({
+            'content': '"id":123',
+            'code': '200',
+            'headers': {'content-type': 'application/json'},
+        })
+        site = {
+            'name': 'Post Example',
+            'cat': 'social',
+            'uri_check': 'https://example.com/api',
+            'post_body': '{"username":"{account}"}',
+            'e_code': 200,
+            'm_code': 404,
+            'e_string': '"id":',
+            'm_string': 'not found',
+        }
+
+        module.checkSite('alice', site)
+
+        self.assertEqual(module.sf.fetchUrl.call_args.kwargs['postData'], '{"username":"alice"}')
+
+    def test_positive_dataset_fingerprint_does_not_require_literal_username(self):
+        module = self._module_for_site_check({
+            'content': '<html>PROFILE EXISTS</html>',
+            'code': '200',
+            'headers': {'content-type': 'text/html'},
+        })
+        site = {
+            'name': 'Fingerprint Example',
+            'cat': 'social',
+            'uri_check': 'https://example.com/{account}',
+            'e_code': 200,
+            'm_code': 404,
+            'e_string': 'PROFILE EXISTS',
+            'm_string': 'NOT FOUND',
+        }
+
+        module.checkSite('alice', site)
+
+        self.assertTrue(any(module.siteResults.values()))
+
+    def test_bytes_response_is_decoded_before_fingerprint_matching(self):
+        module = self._module_for_site_check({
+            'content': b'PROFILE EXISTS',
+            'code': '200',
+            'headers': {'content-type': 'text/plain'},
+        })
+        site = {
+            'name': 'Bytes Example',
+            'cat': 'social',
+            'uri_check': 'https://example.com/{account}',
+            'e_code': 200,
+            'm_code': 404,
+            'e_string': 'PROFILE EXISTS',
+            'm_string': 'NOT FOUND',
+        }
+
+        module.checkSite('alice', site)
+
+        self.assertTrue(any(module.siteResults.values()))
