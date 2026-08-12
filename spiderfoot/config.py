@@ -8,9 +8,10 @@ avoid scattering magic-key lookups throughout the codebase.
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from typing import Mapping, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
 _PROXY_DEFAULT_PORTS = {
@@ -111,6 +112,33 @@ class NetworkConfig:
                 auth = f"{username}@"
 
         return f"{scheme}://{auth}{self.proxy_host}:{self.proxy_port}"
+
+    def should_proxy_url(self, url: str) -> bool:
+        """Return whether a URL should use the configured proxy.
+
+        Local/private targets and the proxy server itself deliberately bypass
+        the proxy. This preserves SpiderFoot's historical local-target behavior
+        while keeping the rule centralized for all modern transports.
+        """
+        if not self.proxy_enabled or not isinstance(url, str) or not url.strip():
+            return False
+
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+
+        host = parsed.hostname.rstrip(".").lower()
+        if host == self.proxy_host.rstrip(".").lower():
+            return False
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+            return False
+
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return True
+
+        return not (address.is_private or address.is_loopback or address.is_link_local)
 
 
 @dataclass(frozen=True)
