@@ -50,6 +50,49 @@ class TestModuleAccounts(unittest.TestCase):
         module = sfp_accounts()
         self.assertEqual(module.checkSites('bad/name', []), [])
 
+    def test_confidence_is_high_with_positive_and_negative_fingerprints(self):
+        confidence, evidence = sfp_accounts._confidence({
+            'e_code': 200,
+            'm_code': 200,
+            'e_string': 'PROFILE EXISTS',
+            'm_string': 'NOT FOUND',
+        })
+        self.assertEqual(confidence, 'HIGH')
+        self.assertIn('positive and negative', evidence)
+
+    def test_confidence_is_medium_with_positive_fingerprint_only(self):
+        confidence, evidence = sfp_accounts._confidence({
+            'e_code': 200,
+            'm_code': 404,
+            'e_string': 'PROFILE EXISTS',
+            'm_string': '',
+        })
+        self.assertEqual(confidence, 'MEDIUM')
+        self.assertIn('positive fingerprint', evidence)
+
+    def test_confidence_is_low_for_heuristic_only_match(self):
+        confidence, evidence = sfp_accounts._confidence({
+            'e_code': 200,
+            'm_code': 200,
+            'e_string': '',
+            'm_string': '',
+        })
+        self.assertEqual(confidence, 'LOW')
+        self.assertIn('username-presence heuristic', evidence)
+
+    def test_result_text_explicitly_does_not_claim_identity_ownership(self):
+        text = sfp_accounts._result_text({
+            'name': 'Instagram',
+            'cat': 'social',
+            'e_code': 200,
+            'm_code': 200,
+            'e_string': 'PROFILE EXISTS',
+            'm_string': 'NOT FOUND',
+        }, 'https://instagram.com/alice')
+        self.assertIn('Confidence: HIGH', text)
+        self.assertIn('identity/ownership is not established', text)
+        self.assertIn('<SFURL>https://instagram.com/alice</SFURL>', text)
+
     def _module_for_site_check(self, response):
         module = sfp_accounts()
         module.sf = Mock()
@@ -89,6 +132,8 @@ class TestModuleAccounts(unittest.TestCase):
         self.assertEqual(kwargs['headers']['Accept'], 'application/json')
         self.assertEqual(kwargs['headers']['X-User'], 'alice')
         self.assertTrue(any(module.siteResults.values()))
+        result_text = next(iter(module.siteResults))
+        self.assertIn('Confidence: HIGH', result_text)
 
     def test_check_site_formats_account_in_post_body(self):
         module = self._module_for_site_check({
