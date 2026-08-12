@@ -251,6 +251,7 @@ def request_with_config(
     url: str,
     *,
     session: requests.Session | None = None,
+    timeout: float | tuple[float, float] | None = None,
     verify: bool = True,
     headers: Mapping[str, str] | None = None,
     cookies=None,
@@ -262,6 +263,7 @@ def request_with_config(
 
     A caller may supply an existing session to retain connection pooling across
     requests. When omitted, a correctly configured isolated session is created.
+    A per-request timeout overrides the configured default when supplied.
     """
     if not isinstance(config, NetworkConfig):
         raise TypeError("config must be a NetworkConfig")
@@ -271,11 +273,12 @@ def request_with_config(
         request_headers["User-Agent"] = config.user_agent
 
     active_session = session or build_session_from_config(config)
+    effective_timeout = config.timeout if timeout is None else timeout
     return request_url(
         active_session,
         method,
         url,
-        timeout=config.timeout,
+        timeout=effective_timeout,
         verify=verify,
         headers=request_headers,
         cookies=cookies,
