@@ -45,6 +45,22 @@ except OSError:
 """
         self.assertEqual(audit_source(source), [])
 
+    def test_tuple_with_exception_is_review_only(self):
+        findings = audit_source(
+            "try:\n    run()\nexcept (ValueError, Exception):\n    pass\n",
+            "sample.py",
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].kind, "broad-exception")
+
+    def test_tuple_with_base_exception_is_blocking(self):
+        findings = audit_source(
+            "try:\n    run()\nexcept (ValueError, BaseException):\n    pass\n",
+            "sample.py",
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].kind, "base-exception")
+
     def test_repository_scan_excludes_generated_dependency_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
