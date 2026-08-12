@@ -13,6 +13,14 @@ from typing import Mapping, Any
 from urllib.parse import quote
 
 
+_PROXY_DEFAULT_PORTS = {
+    "4": 1080,
+    "5": 1080,
+    "HTTP": 8080,
+    "TOR": 9050,
+}
+
+
 @dataclass(frozen=True)
 class NetworkConfig:
     """Validated network settings derived from the legacy configuration dict."""
@@ -40,8 +48,12 @@ class NetworkConfig:
             raise ValueError("_fetchtimeout must be greater than zero")
 
         proxy_type = str(options.get("_socks1type", "") or "").upper().strip()
-        if proxy_type and proxy_type not in {"4", "5", "HTTP", "TOR"}:
+        if proxy_type and proxy_type not in _PROXY_DEFAULT_PORTS:
             raise ValueError("_socks1type must be one of: 4, 5, HTTP, TOR")
+
+        proxy_host = str(options.get("_socks2addr", "") or "").strip()
+        if proxy_type and not proxy_host:
+            raise ValueError("_socks2addr is required when a proxy type is configured")
 
         raw_port = options.get("_socks3port", "")
         proxy_port = None
@@ -52,16 +64,25 @@ class NetworkConfig:
                 raise ValueError("_socks3port must be an integer") from exc
             if not 1 <= proxy_port <= 65535:
                 raise ValueError("_socks3port must be between 1 and 65535")
+        elif proxy_type:
+            # Match SpiderFoot's historical defaults while keeping the decision
+            # centralized and testable in the typed configuration layer.
+            proxy_port = _PROXY_DEFAULT_PORTS[proxy_type]
+
+        proxy_username = str(options.get("_socks4user", "") or "")
+        proxy_password = str(options.get("_socks5pwd", "") or "")
+        if proxy_password and not proxy_username:
+            raise ValueError("_socks4user is required when _socks5pwd is configured")
 
         return cls(
             timeout=timeout,
             user_agent=str(options.get("_useragent", "SpiderFoot") or "SpiderFoot"),
             dns_server=str(options.get("_dnsserver", "") or "").strip(),
             proxy_type=proxy_type,
-            proxy_host=str(options.get("_socks2addr", "") or "").strip(),
+            proxy_host=proxy_host,
             proxy_port=proxy_port,
-            proxy_username=str(options.get("_socks4user", "") or ""),
-            proxy_password=str(options.get("_socks5pwd", "") or ""),
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
         )
 
     @property
