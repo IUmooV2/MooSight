@@ -18,6 +18,12 @@ if not exist "sf.py" (
   pause
   exit /b 1
 )
+if not exist "moosight.py" (
+  echo MooSight cannot start because moosight.py is missing.
+  echo Download/extract the complete MooSight repository, not only this BAT file.
+  pause
+  exit /b 1
+)
 if not exist "requirements.txt" (
   echo MooSight cannot start because requirements.txt is missing.
   echo Download/extract the complete MooSight repository, not only this BAT file.
@@ -91,14 +97,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [6/6] Starting MooSight...
+echo [6/6] Starting MooSight with the modern core...
 echo.
 echo Your browser will open automatically.
 echo Keep this window open while using MooSight.
 echo Press Ctrl+C here when you want to stop it.
 echo.
 start "" "http://127.0.0.1:5001"
-".venv\Scripts\python.exe" sf.py -l 127.0.0.1:5001
+".venv\Scripts\python.exe" moosight.py -l 127.0.0.1:5001
 set "EXITCODE=%ERRORLEVEL%"
 
 if not "%EXITCODE%"=="0" (
