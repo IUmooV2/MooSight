@@ -2,9 +2,9 @@
 """Verify MooSight's modern runtime routing and security invariants.
 
 This check is intentionally local and network-free. It proves that the normal
-MooSight entry point routes core construction through ``ModernSpiderFoot`` and
-that constructing the core does not leave process-wide HTTPS or DNS/socket
-behavior modified.
+MooSight entry point routes core and scanner construction through modern
+compatibility facades and that constructing the core does not leave process-wide
+HTTPS or DNS/socket behavior modified.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import sf
 import sfscan
 from spiderfoot.modern_core import ModernSpiderFoot
 from spiderfoot.modern_network_mixin import ModernNetworkMixin
+from spiderfoot.modern_scanner import ModernSpiderFootScanner
 
 
 _SOCKET_RESOLVER_FUNCTIONS = (
@@ -55,8 +56,14 @@ def verify_runtime() -> list[Check]:
     checks.append(_result(
         "scanner core routing",
         sfscan.SpiderFoot is ModernSpiderFoot,
-        "sfscan.py is routed to ModernSpiderFoot",
-        "sfscan.py is not routed to ModernSpiderFoot",
+        "sfscan.py core construction is routed to ModernSpiderFoot",
+        "sfscan.py core construction is not routed to ModernSpiderFoot",
+    ))
+    checks.append(_result(
+        "scanner facade routing",
+        sfscan.SpiderFootScanner is ModernSpiderFootScanner,
+        "scanner construction is routed to ModernSpiderFootScanner",
+        "scanner construction is not routed to ModernSpiderFootScanner",
     ))
 
     mro = ModernSpiderFoot.__mro__
@@ -75,8 +82,6 @@ def verify_runtime() -> list[Check]:
     }
     core = None
     try:
-        # Use a DNS override deliberately so the verifier exercises and detects
-        # the legacy constructor's process-wide resolver mutation path.
         core = ModernSpiderFoot({"_dnsserver": "1.1.1.1"})
         after_context: Callable = ssl._create_default_https_context
         checks.append(_result(
