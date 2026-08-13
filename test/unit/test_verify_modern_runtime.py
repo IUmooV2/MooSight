@@ -61,6 +61,7 @@ class TestModernRuntimeVerifier(unittest.TestCase):
         by_name = {check.name: check for check in checks}
         self.assertTrue(by_name["web UI facade routing"].ok)
         self.assertTrue(by_name["web UI core routing"].ok)
+        self.assertTrue(by_name["web startscan exposure"].ok)
 
     def test_check_names_are_unique(self):
         checks = verify_runtime()
