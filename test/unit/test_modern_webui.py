@@ -6,6 +6,9 @@ from spiderfoot.modern_webui import ModernSpiderFootWebUi
 
 class TestModernWebUi(unittest.TestCase):
 
+    def test_startscan_route_is_exposed_to_cherrypy(self):
+        self.assertTrue(getattr(ModernSpiderFootWebUi.startscan, 'exposed', False))
+
     @patch('spiderfoot.modern_webui.LegacySpiderFootWebUi.startscan')
     @patch('spiderfoot.modern_webui.SpiderFootHelpers.targetTypeFromString')
     def test_startscan_normalizes_unrecognized_bare_username(self, target_type, legacy_start):
