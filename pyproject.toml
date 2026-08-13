@@ -1,0 +1,81 @@
+[project]
+name = "moosight"
+version = "0.1.0.dev0"
+description = "Modernized SpiderFoot-based OSINT tooling"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "MooSight contributors" }
+]
+
+# Runtime dependencies remain in requirements.txt during the compatibility
+# migration. Moving them here is intentionally deferred until each legacy pin
+# has been validated against the supported Python matrix.
+dynamic = ["dependencies"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["test"]
+filterwarnings = [
+  "error::DeprecationWarning:spiderfoot.*",
+  "default::DeprecationWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = [
+  "test/*",
+  "spiderfoot/static/node_modules/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [
+  "spiderfoot/static/node_modules",
+  "build",
+  "dist",
+]
+
+[tool.ruff.lint]
+select = [
+  "E4",
+  "E7",
+  "E9",
+  "F",
+  "B",
+  "UP",
+  "S",
+]
+ignore = [
+  # Legacy SpiderFoot code is migrated incrementally. Security rules are
+  # enabled for new/modified code first rather than creating thousands of
+  # unactionable findings in one change.
+  "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+no_implicit_optional = true
+exclude = "(^spiderfoot/static/node_modules/|^build/|^dist/)"
+
+# Type checking remains non-strict during migration. New infrastructure
+# modules should progressively opt into stricter checking.
+strict = false

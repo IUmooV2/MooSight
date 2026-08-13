@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------------
 # Name:         sfp_accounts
-# Purpose:      Identify the existence of a given acount on various sites thanks
-#               to Micah Hoffman's (https://github.com/WebBreacher) list.
+# Purpose:      Identify the existence of a given account on various sites using
+#               the WhatsMyName dataset.
 #
-# Author:      Steve Micallef <steve@binarypool.com>
-#
-# Created:     18/02/2015
-# Copyright:   (c) Steve Micallef 2015
-# Licence:     MIT
+# Author:       Steve Micallef <steve@binarypool.com>
+# MooSight:     hardened username validation and result quality improvements
+# Licence:      MIT
 # -------------------------------------------------------------------------------
 
 import json
@@ -17,20 +15,21 @@ import threading
 import time
 from queue import Empty as QueueEmpty
 from queue import Queue
+from urllib.parse import urlparse
 
 from spiderfoot import SpiderFootEvent, SpiderFootHelpers, SpiderFootPlugin
+from spiderfoot.account_health import dumps_health, loads_health, merge_health, reliability_text
 
 
 class sfp_accounts(SpiderFootPlugin):
 
     meta = {
         'name': "Account Finder",
-        'summary': "Look for possible associated accounts on over 500 social and other websites such as Instagram, Reddit, etc.",
+        'summary': "Look for possible associated accounts across social and other websites using the current WhatsMyName dataset.",
         'useCases': ["Footprint", "Passive"],
         'categories': ["Social Media"]
     }
 
-    # Default options
     opts = {
         "ignorenamedict": True,
         "ignoreworddict": True,
@@ -38,253 +37,329 @@ class sfp_accounts(SpiderFootPlugin):
         "userfromemail": True,
         "permutate": False,
         "usernamesize": 4,
+        "allow_insecure_tls": False,
         "_maxthreads": 20
     }
 
-    # Option descriptions
     optdescs = {
         "ignorenamedict": "Don't bother looking up names that are just stand-alone first names (too many false positives).",
         "ignoreworddict": "Don't bother looking up names that appear in the dictionary.",
-        "musthavename": "The username must be mentioned on the social media page to consider it valid (helps avoid false positives).",
-        "userfromemail": "Extract usernames from e-mail addresses at all? If disabled this can reduce false positives for common usernames but for highly unique usernames it would result in missed accounts.",
-        "permutate": "Look for the existence of account name permutations. Useful to identify fraudulent social media accounts or account squatting.",
-        "usernamesize": "The minimum length of a username to query across social media sites. Helps avoid false positives for very common short usernames.",
-        "_maxthreads": "Maximum threads"
+        "musthavename": "Require the username to appear in returned text when the dataset does not already provide a positive fingerprint.",
+        "userfromemail": "Extract usernames from e-mail addresses.",
+        "permutate": "Look for similar username permutations. This can be noisy and is disabled by default.",
+        "usernamesize": "Minimum username length to query.",
+        "allow_insecure_tls": "Allow account checks to bypass TLS certificate verification. Disabled by default.",
+        "_maxthreads": "Maximum concurrent account checks."
     }
 
     results = None
     reportedUsers = list()
     siteResults = dict()
+    siteHealth = dict()
+    aggregateHealth = dict()
     sites = list()
     errorState = False
     distrustedChecked = False
     lock = None
+
+    _HEALTH_CACHE_KEY = "sfaccounts_health_v1"
+    _HEALTH_CACHE_HOURS = 24 * 365
 
     def setup(self, sfc, userOpts=dict()):
         self.sf = sfc
         self.results = self.tempStorage()
         self.commonNames = list()
         self.reportedUsers = list()
+        self.siteResults = dict()
+        self.siteHealth = dict()
+        self.aggregateHealth = dict()
+        self.sites = list()
         self.errorState = False
         self.distrustedChecked = False
         self.__dataSource__ = "Social Media"
         self.lock = threading.Lock()
 
+        self.opts = dict(type(self).opts)
         for opt in list(userOpts.keys()):
             self.opts[opt] = userOpts[opt]
 
         self.commonNames = SpiderFootHelpers.humanNamesFromWordlists()
         self.words = SpiderFootHelpers.dictionaryWordsFromWordlists()
 
-        content = self.sf.cacheGet("sfaccountsv2", 48)
+        self.aggregateHealth = loads_health(
+            self.sf.cacheGet(self._HEALTH_CACHE_KEY, self._HEALTH_CACHE_HOURS)
+        )
+
+        content = self.sf.cacheGet("sfaccountsv3", 12)
         if content is None:
             url = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
             data = self.sf.fetchUrl(url, useragent="SpiderFoot")
-
-            if data['content'] is None:
+            if not data or data.get('content') is None:
                 self.error(f"Unable to fetch {url}")
                 self.errorState = True
                 return
-
             content = data['content']
-            self.sf.cachePut("sfaccountsv2", content)
+            self.sf.cachePut("sfaccountsv3", content)
 
         try:
-            self.sites = [site for site in json.loads(content)['sites'] if not site.get('valid', True) is False]
-        except Exception as e:
-            self.error(f"Unable to parse social media accounts list: {e}")
+            rawsites = json.loads(content)['sites']
+            self.sites = [
+                site for site in rawsites
+                if site.get('valid', True) is not False
+                and site.get('uri_check')
+                and site.get('name')
+            ]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.error(f"Unable to parse social media accounts list: {exc}")
             self.errorState = True
-            return
 
     def watchedEvents(self):
         return ["EMAILADDR", "DOMAIN_NAME", "HUMAN_NAME", "USERNAME"]
 
     def producedEvents(self):
-        return ["USERNAME", "ACCOUNT_EXTERNAL_OWNED",
-                "SIMILAR_ACCOUNT_EXTERNAL"]
+        return ["USERNAME", "ACCOUNT_EXTERNAL_OWNED", "SIMILAR_ACCOUNT_EXTERNAL"]
 
-    def checkSite(self, name, site):
-        if 'uri_check' not in site:
-            return
+    @staticmethod
+    def _normalize_username(name):
+        if not isinstance(name, str):
+            return None
+        name = name.strip().strip('"').strip("'").strip()
+        if not name or any(c in name for c in ('/', '\\', '\r', '\n', '\t')):
+            return None
+        return name
 
-        url = site['uri_check'].format(account=name)
-        if 'uri_pretty' in site:
-            ret_url = site['uri_pretty'].format(account=name)
-        else:
-            ret_url = url
-        retname = f"{site['name']} (Category: {site['cat']})\n<SFURL>{ret_url}</SFURL>"
+    @staticmethod
+    def _host(url):
+        try:
+            return (urlparse(url).hostname or '').lower()
+        except (TypeError, ValueError):
+            return ''
 
-        post = None
-        if site.get('post_body'):
-            post = site['post_body']
+    @staticmethod
+    def _header(headers, name):
+        wanted = name.lower()
+        for key, value in (headers or {}).items():
+            if str(key).lower() == wanted:
+                return value
+        return ''
 
-        res = self.sf.fetchUrl(
-            url,
-            postData=post,
-            timeout=self.opts['_fetchtimeout'],
-            useragent=self.opts['_useragent'],
-            noLog=True,
-            verify=False
+    @staticmethod
+    def _format_site_value(value, account):
+        if not isinstance(value, str):
+            return value
+        return value.replace('{account}', account)
+
+    @staticmethod
+    def _confidence(site):
+        expected = bool(site.get('e_string'))
+        missing = bool(site.get('m_string'))
+        expected_code = site.get('e_code')
+        missing_code = site.get('m_code')
+
+        if expected and missing:
+            return "HIGH", "site-specific positive and negative fingerprints matched"
+        if expected and expected_code is not None:
+            return "MEDIUM", "site-specific positive fingerprint and HTTP status matched"
+        if missing and expected_code is not None and expected_code != missing_code:
+            return "MEDIUM", "HTTP status matched and known missing-page fingerprint was absent"
+        return "LOW", "HTTP response and username-presence heuristic matched"
+
+    @staticmethod
+    def _result_text(site, ret_url, health_record=None):
+        confidence, evidence = sfp_accounts._confidence(site)
+        return (
+            f"{site['name']} (Category: {site.get('cat', 'unknown')})\n"
+            f"Confidence: {confidence}\n"
+            f"Evidence: {evidence}\n"
+            f"Site reliability: {reliability_text(health_record)}\n"
+            "Interpretation: username appears to exist on this service; identity/ownership is not established.\n"
+            f"<SFURL>{ret_url}</SFURL>"
         )
 
-        if not res['content']:
-            with self.lock:
-                self.siteResults[retname] = False
-            return
-
-        if site.get('e_code') != site.get('m_code'):
-            if res['code'] != str(site.get('e_code')):
-                with self.lock:
-                    self.siteResults[retname] = False
-                return
-
-        if site.get('e_string') not in res['content'] or (site.get('m_string') and site.get('m_string') in res['content']):
-            with self.lock:
-                self.siteResults[retname] = False
-            return
-
-        if self.opts['musthavename']:
-            if name.lower() not in res['content'].lower():
-                self.debug(f"Skipping {site['name']} as username not mentioned.")
-                with self.lock:
-                    self.siteResults[retname] = False
-                return
-
-        # Some sites can't handle periods so treat bob.abc and bob as the same
-        # TODO: fix this once WhatsMyName has support for usernames with '.'
-        if "." in name:
-            firstname = name.split(".")[0]
-            if firstname + "<" in res['content'] or firstname + '"' in res['content']:
-                with self.lock:
-                    self.siteResults[retname] = False
-                return
-
+    def _record_site_health(self, site, status, detail=None):
+        """Record one site's behavior for diagnostics and quality filtering."""
+        name = str(site.get('name') or 'unknown')
         with self.lock:
-            self.siteResults[retname] = True
+            record = self.siteHealth.setdefault(name, {
+                'positive': 0,
+                'negative': 0,
+                'error': 0,
+                'ambiguous': 0,
+                'last_detail': None,
+            })
+            if status in record:
+                record[status] += 1
+            if detail:
+                record['last_detail'] = str(detail)[:240]
 
-    def checkSites(self, username, sites=None):
-        def processSiteQueue(username, queue):
-            try:
-                while True:
-                    site = queue.get(timeout=0.1)
-                    try:
-                        self.checkSite(username, site)
-                    except Exception as e:
-                        self.debug(f'Thread {threading.current_thread().name} exception: {e}')
-            except QueueEmpty:
+    def _set_site_result(self, retname, found, site, status, detail=None):
+        with self.lock:
+            self.siteResults[retname] = found
+        self._record_site_health(site, status, detail)
+
+    def _persist_site_health(self):
+        """Merge this check's username-free health statistics into local history."""
+        self.aggregateHealth = merge_health(self.aggregateHealth, self.siteHealth)
+        try:
+            self.sf.cachePut(self._HEALTH_CACHE_KEY, dumps_health(self.aggregateHealth))
+        except (OSError, TypeError, ValueError) as exc:
+            self.debug(f"Unable to persist Account Finder site health: {exc}")
+
+    def _penalize_random_false_positive(self, site_name):
+        """Record a random-control match as unreliable behavior, not success."""
+        current = {
+            site_name: {
+                'positive': 0,
+                'negative': 0,
+                'ambiguous': 1,
+                'error': 0,
+                'last_detail': 'matched randomized control username',
+            }
+        }
+        self.aggregateHealth = merge_health(self.aggregateHealth, current)
+
+    def checkSite(self, name, site):
+        name = self._normalize_username(name)
+        if not name:
+            return
+
+        try:
+            url = site['uri_check'].format(account=name)
+            ret_url = site.get('uri_pretty', site['uri_check']).format(account=name)
+        except (KeyError, ValueError, IndexError) as exc:
+            self._record_site_health(site, 'error', f'invalid dataset URL template: {exc}')
+            return
+
+        if not self._host(url) or not url.lower().startswith(('http://', 'https://')):
+            self._record_site_health(site, 'error', 'invalid or unsupported check URL')
+            return
+
+        retname = self._result_text(site, ret_url, self.aggregateHealth.get(str(site.get('name') or '')))
+        post = self._format_site_value(site.get('post_body'), name)
+        headers = {
+            str(key): self._format_site_value(value, name)
+            for key, value in (site.get('headers') or {}).items()
+        }
+
+        try:
+            res = self.sf.fetchUrl(
+                url,
+                postData=post,
+                headers=headers or None,
+                timeout=self.opts['_fetchtimeout'],
+                useragent=self.opts['_useragent'],
+                noLog=True,
+                verify=bool(self.opts.get('allow_insecure_tls', False)) is False
+            )
+        except Exception as exc:
+            self._set_site_result(retname, False, site, 'error', f'network exception: {exc}')
+            return
+
+        if not res:
+            self._set_site_result(retname, False, site, 'error', 'no response')
+            return
+
+        content = res.get('content')
+        if isinstance(content, bytes):
+            content = content.decode('utf-8', errors='replace')
+        elif content is not None and not isinstance(content, str):
+            content = str(content)
+
+        code = str(res.get('code') or '')
+        if content is None:
+            self._set_site_result(retname, False, site, 'error', f'empty response body; HTTP {code or "unknown"}')
+            return
+
+        expected_code = site.get('e_code')
+        missing_code = site.get('m_code')
+        expected = site.get('e_string')
+        missing = site.get('m_string')
+
+        if missing and missing in content:
+            self._set_site_result(retname, False, site, 'negative', 'known missing-account fingerprint matched')
+            return
+
+        if expected_code != missing_code and code != str(expected_code):
+            if missing_code is not None and code == str(missing_code):
+                self._set_site_result(retname, False, site, 'negative', f'known missing-account HTTP status {code}')
+            else:
+                self._set_site_result(retname, False, site, 'ambiguous', f'unexpected HTTP status {code or "unknown"}')
+            return
+
+        if expected and expected not in content:
+            self._set_site_result(retname, False, site, 'ambiguous', 'expected positive fingerprint absent')
+            return
+
+        if self.opts['musthavename'] and not expected:
+            ctype = str(self._header(res.get('headers'), 'content-type')).lower()
+            textual = not ctype or any(t in ctype for t in ('text/', 'json', 'javascript', 'xml'))
+            if textual and name.lower() not in content.lower():
+                self.debug(f"Skipping {site['name']} because the username was not present in the response.")
+                self._set_site_result(retname, False, site, 'ambiguous', 'username absent from heuristic response')
                 return
+
+        self._set_site_result(retname, True, site, 'positive')
+
+    def checkSites(self, username, sites=None, persist_health=True):
+        username = self._normalize_username(username)
+        if not username:
+            return []
+
+        def processSiteQueue(username, queue):
+            while True:
+                try:
+                    site = queue.get_nowait()
+                except QueueEmpty:
+                    return
+                try:
+                    self.checkSite(username, site)
+                except Exception as exc:
+                    self._record_site_health(site, 'error', f'worker exception: {exc}')
+                    self.debug(f'Thread {threading.current_thread().name} exception: {exc}')
+                finally:
+                    queue.task_done()
 
         startTime = time.monotonic()
-
-        # results will be collected in siteResults
         self.siteResults = {}
-
+        self.siteHealth = {}
         sites = self.sites if sites is None else sites
-
-        # load the queue
         queue = Queue()
         for site in sites:
             queue.put(site)
 
-        # start the scan threads
         threads = []
-        for i in range(min(len(sites), self.opts['_maxthreads'])):
-            thread = threading.Thread(
-                name=f'sfp_accounts_scan_{i}',
-                target=processSiteQueue,
-                args=(username, queue))
+        for i in range(min(len(sites), int(self.opts['_maxthreads']))):
+            thread = threading.Thread(name=f'sfp_accounts_scan_{i}', target=processSiteQueue,
+                                      args=(username, queue), daemon=True)
             thread.start()
             threads.append(thread)
 
-        # wait for all scan threads to finish
-        while threads:
-            threads.pop(0).join()
+        queue.join()
+        for thread in threads:
+            thread.join(timeout=0.5)
 
-        duration = time.monotonic() - startTime
-        scanRate = len(sites) / duration
-        self.debug(f'Scan statistics: name={username}, count={len(self.siteResults)}, duration={duration:.2f}, rate={scanRate:.0f}')
-
-        return [site for site, found in self.siteResults.items() if found]
+        duration = max(time.monotonic() - startTime, 0.001)
+        health_counts = {
+            key: sum(record.get(key, 0) for record in self.siteHealth.values())
+            for key in ('positive', 'negative', 'ambiguous', 'error')
+        }
+        self.debug(
+            f"Scan statistics: name={username}, sites={len(sites)}, responses={len(self.siteResults)}, "
+            f"positive={health_counts['positive']}, negative={health_counts['negative']}, "
+            f"ambiguous={health_counts['ambiguous']}, errors={health_counts['error']}, "
+            f"duration={duration:.2f}, rate={len(sites) / duration:.0f}"
+        )
+        positives = sorted([site for site, found in self.siteResults.items() if found])
+        if persist_health:
+            self._persist_site_health()
+        return positives
 
     def generatePermutations(self, username):
-        permutations = list()
-        prefixsuffix = ['_', '-']
-        replacements = {
-            'a': ['4', 's'],
-            'b': ['v', 'n'],
-            'c': ['x', 'v'],
-            'd': ['s', 'f'],
-            'e': ['w', 'r'],
-            'f': ['d', 'g'],
-            'g': ['f', 'h'],
-            'h': ['g', 'j', 'n'],
-            'i': ['o', 'u', '1'],
-            'j': ['k', 'h', 'i'],
-            'k': ['l', 'j'],
-            'l': ['i', '1', 'k'],
-            'm': ['n'],
-            'n': ['m'],
-            'o': ['p', 'i', '0'],
-            'p': ['o', 'q'],
-            'r': ['t', 'e'],
-            's': ['a', 'd', '5'],
-            't': ['7', 'y', 'z', 'r'],
-            'u': ['v', 'i', 'y', 'z'],
-            'v': ['u', 'c', 'b'],
-            'w': ['v', 'vv', 'q', 'e'],
-            'x': ['z', 'y', 'c'],
-            'y': ['z', 'x'],
-            'z': ['y', 'x'],
-            '0': ['o'],
-            '1': ['l'],
-            '2': ['5'],
-            '3': ['e'],
-            '4': ['a'],
-            '5': ['s'],
-            '6': ['b'],
-            '7': ['t'],
-            '8': ['b'],
-            '9': []
-        }
-        pairs = {
-            'oo': ['00'],
-            'll': ['l1l', 'l1l', '111', '11'],
-            '11': ['ll', 'lll', 'l1l', '1l1']
-        }
-
-        # Generate a set with replacements, then
-        # add suffixes and prefixes.
-        pos = 0
-        for c in username:
-            if c not in replacements:
-                continue
-            if len(replacements[c]) == 0:
-                continue
-            npos = pos + 1
-            for xc in replacements[c]:
-                newuser = username[0:pos] + xc + username[npos:len(username)]
-                permutations.append(newuser)
-
-            pos += 1
-
-        # Search for common double-letter replacements
-        for p in pairs:
-            if p in username:
-                for r in pairs[p]:
-                    permutations.append(username.replace(p, r))
-
-        # Search for prefixed and suffixed usernames
-        for c in prefixsuffix:
-            permutations.append(username + c)
-            permutations.append(c + username)
-
-        # Search for double character usernames
-        pos = 0
-        for c in username:
-            permutations.append(username[0:pos] + c + c + username[(pos + 1):len(username)])
-            pos += 1
-
-        return list(set(permutations))
+        permutations = set()
+        for marker in ('_', '-'):
+            permutations.add(username + marker)
+            permutations.add(marker + username)
+        return sorted(permutations)
 
     def handleEvent(self, event):
         eventName = event.eventType
@@ -294,116 +369,74 @@ class sfp_accounts(SpiderFootPlugin):
 
         if self.errorState:
             return
-
         self.debug(f"Received event, {eventName}, from {srcModuleName}")
 
-        # Skip events coming from me unless they are USERNAME events
         if eventName != "USERNAME" and srcModuleName == "sfp_accounts":
-            self.debug(f"Ignoring {eventName}, from self.")
             return
-
         if eventData in list(self.results.keys()):
             return
-
         self.results[eventData] = True
 
-        # If being called for the first time, let's see how trusted the
-        # sites are by attempting to fetch a garbage user.
         if not self.distrustedChecked:
-            # Check if a state cache exists first, to not have to do this all the time
-            content = self.sf.cacheGet("sfaccounts_state_v3", 72)
+            content = self.sf.cacheGet("sfaccounts_state_v5", 24)
             if content:
-                if content != "None":  # "None" is written to the cached file when no sites are distrusted
-                    delsites = list()
-                    for line in content.split("\n"):
-                        if line == '':
-                            continue
-                        delsites.append(line)
-                    self.sites = [d for d in self.sites if d['name'] not in delsites]
+                if content != "None":
+                    distrusted = [line for line in content.split("\n") if line]
+                    self.sites = [d for d in self.sites if d['name'] not in distrusted]
             else:
                 randpool = 'abcdefghijklmnopqrstuvwxyz1234567890'
-                randuser = ''.join([random.SystemRandom().choice(randpool) for x in range(10)])
-                res = self.checkSites(randuser)
+                randuser = ''.join(random.SystemRandom().choice(randpool) for _ in range(14))
+                res = self.checkSites(randuser, persist_health=False)
                 if res:
-                    delsites = list()
+                    distrusted = []
                     for site in res:
                         sitename = site.split(" (Category:")[0]
-                        self.debug(f"Distrusting {sitename}")
-                        delsites.append(sitename)
-                    self.sites = [d for d in self.sites if d['name'] not in delsites]
+                        self.debug(f"Distrusting {sitename}: it matched a random username.")
+                        distrusted.append(sitename)
+                        self._penalize_random_false_positive(sitename)
+                    self.sites = [d for d in self.sites if d['name'] not in distrusted]
+                    self.sf.cachePut("sfaccounts_state_v5", "\n".join(distrusted))
+                    self.sf.cachePut(self._HEALTH_CACHE_KEY, dumps_health(self.aggregateHealth))
                 else:
-                    # The caching code needs *some* content
-                    delsites = "None"
-                self.sf.cachePut("sfaccounts_state_v3", delsites)
-
+                    self.sf.cachePut("sfaccounts_state_v5", "None")
             self.distrustedChecked = True
 
         if eventName == "HUMAN_NAME":
-            names = [eventData.lower().replace(" ", ""), eventData.lower().replace(" ", ".")]
-            for name in names:
-                users.append(name)
-
-        if eventName == "DOMAIN_NAME":
+            users.extend([eventData.lower().replace(" ", ""), eventData.lower().replace(" ", ".")])
+        elif eventName == "DOMAIN_NAME":
             kw = self.sf.domainKeyword(eventData, self.opts['_internettlds'])
-            if not kw:
-                return
-
-            users.append(kw)
-
-        if eventName == "EMAILADDR" and self.opts['userfromemail']:
-            name = eventData.split("@")[0].lower()
-            users.append(name)
-
-        if eventName == "USERNAME":
-            users.append(eventData)
+            if kw:
+                users.append(kw)
+        elif eventName == "EMAILADDR" and self.opts['userfromemail']:
+            users.append(eventData.split("@")[0].lower())
+        elif eventName == "USERNAME":
+            normalized = self._normalize_username(eventData)
+            if normalized:
+                users.append(normalized)
 
         for user in set(users):
             if user in self.opts['_genericusers'].split(","):
-                self.debug(f"{user} is a generic account name, skipping.")
                 continue
-
             if self.opts['ignorenamedict'] and user in self.commonNames:
-                self.debug(f"{user} is found in our name dictionary, skipping.")
                 continue
-
             if self.opts['ignoreworddict'] and user in self.words:
-                self.debug(f"{user} is found in our word dictionary, skipping.")
                 continue
-
+            if len(user) < int(self.opts['usernamesize']):
+                continue
             if user not in self.reportedUsers and eventData != user:
-                if len(user) < self.opts['usernamesize']:
-                    self.debug(f"{user} is too short, skipping.")
-                    continue
-
                 evt = SpiderFootEvent("USERNAME", user, self.__name__, event)
                 self.notifyListeners(evt)
                 self.reportedUsers.append(user)
 
-        # Only look up accounts when we've received a USERNAME event (possibly from
-        # ourselves), since we want them to have gone through some verification by
-        # this module, and we don't want duplicates (one based on EMAILADDR and another
-        # based on USERNAME).
-        if eventName == "USERNAME":
-            res = self.checkSites(user)
-            for site in res:
-                evt = SpiderFootEvent(
-                    "ACCOUNT_EXTERNAL_OWNED",
-                    site,
-                    self.__name__,
-                    event
-                )
-                self.notifyListeners(evt)
+        if eventName != "USERNAME" or not users:
+            return
 
-            if self.opts['permutate']:
-                permutations = self.generatePermutations(user)
-                for puser in permutations:
-                    res = self.checkSites(puser)
-                    for site in res:
-                        evt = SpiderFootEvent(
-                            "SIMILAR_ACCOUNT_EXTERNAL",
-                            site,
-                            self.__name__,
-                            event
-                        )
-                        self.notifyListeners(evt)
+        user = users[0]
+        for site in self.checkSites(user):
+            self.notifyListeners(SpiderFootEvent("ACCOUNT_EXTERNAL_OWNED", site, self.__name__, event))
+
+        if self.opts['permutate']:
+            for puser in self.generatePermutations(user):
+                for site in self.checkSites(puser):
+                    self.notifyListeners(SpiderFootEvent("SIMILAR_ACCOUNT_EXTERNAL", site, self.__name__, event))
 # End of sfp_accounts class

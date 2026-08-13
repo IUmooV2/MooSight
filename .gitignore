@@ -1,5 +1,4 @@
-# SpiderFoot specific #
-#######################
+# MooSight / SpiderFoot runtime data
 /cache/
 /log/
 /spiderfoot.db*
@@ -7,87 +6,19 @@ passwd
 spiderfoot.crt
 spiderfoot.key
 
-spiderfoot/static/node_modules/*
+# Frontend dependencies and generated assets
+spiderfoot/static/node_modules/
 
-spiderfoot/static/node_modules/alertifyjs/*
-spiderfoot/static/node_modules/alertifyjs/build/*
-spiderfoot/static/node_modules/alertifyjs/build/css/*
-
-!spiderfoot/static/node_modules/alertifyjs/
-!spiderfoot/static/node_modules/alertifyjs/build/
-!spiderfoot/static/node_modules/alertifyjs/build/alertify.min.js
-!spiderfoot/static/node_modules/alertifyjs/build/css/
-!spiderfoot/static/node_modules/alertifyjs/build/css/alertify.min.css
-
-spiderfoot/static/node_modules/bootstrap/*
-spiderfoot/static/node_modules/bootstrap/dist/*
-spiderfoot/static/node_modules/bootstrap/dist/js/*
-spiderfoot/static/node_modules/bootstrap/dist/css/*
-spiderfoot/static/node_modules/bootstrap/dist/fonts/*
-
-!spiderfoot/static/node_modules/bootstrap/
-!spiderfoot/static/node_modules/bootstrap/dist/
-!spiderfoot/static/node_modules/bootstrap/dist/js/
-!spiderfoot/static/node_modules/bootstrap/dist/js/bootstrap.min.js
-!spiderfoot/static/node_modules/bootstrap/dist/css/
-!spiderfoot/static/node_modules/bootstrap/dist/css/bootstrap.min.css
-!spiderfoot/static/node_modules/bootstrap/dist/fonts/
-!spiderfoot/static/node_modules/bootstrap/dist/fonts/glyphicons-halflings-regular.woff
-!spiderfoot/static/node_modules/bootstrap/dist/fonts/glyphicons-halflings-regular.woff2
-
-spiderfoot/static/node_modules/jquery/*
-spiderfoot/static/node_modules/jquery/dist/*
-
-!spiderfoot/static/node_modules/jquery/
-!spiderfoot/static/node_modules/jquery/dist/
-!spiderfoot/static/node_modules/jquery/dist/jquery.min.js
-
-spiderfoot/static/node_modules/sigma/*
-spiderfoot/static/node_modules/sigma/build/*
-spiderfoot/static/node_modules/sigma/build/plugins/*
-
-!spiderfoot/static/node_modules/sigma/
-!spiderfoot/static/node_modules/sigma/build/
-!spiderfoot/static/node_modules/sigma/build/sigma.min.js
-!spiderfoot/static/node_modules/sigma/build/plugins/
-!spiderfoot/static/node_modules/sigma/build/plugins/sigma.parsers.json.min.js
-!spiderfoot/static/node_modules/sigma/build/plugins/sigma.plugins.dragNodes.min.js
-!spiderfoot/static/node_modules/sigma/build/plugins/sigma.layout.forceAtlas2.min.js
-!spiderfoot/static/node_modules/sigma/build/plugins/sigma.renderers.snapshot.min.js
-
-spiderfoot/static/node_modules/tablesorter/*
-spiderfoot/static/node_modules/tablesorter/dist/*
-spiderfoot/static/node_modules/tablesorter/dist/js/*
-spiderfoot/static/node_modules/tablesorter/dist/css/*
-spiderfoot/static/node_modules/tablesorter/dist/js/extras/*
-
-!spiderfoot/static/node_modules/tablesorter/
-!spiderfoot/static/node_modules/tablesorter/dist/
-!spiderfoot/static/node_modules/tablesorter/dist/css/
-!spiderfoot/static/node_modules/tablesorter/dist/css/jquery.tablesorter.pager.min.css
-!spiderfoot/static/node_modules/tablesorter/dist/css/theme.default.min.css
-!spiderfoot/static/node_modules/tablesorter/dist/js/
-!spiderfoot/static/node_modules/tablesorter/dist/js/jquery.tablesorter.min.js
-!spiderfoot/static/node_modules/tablesorter/dist/js/jquery.tablesorter.widgets.min.js
-!spiderfoot/static/node_modules/tablesorter/dist/js/extras/
-!spiderfoot/static/node_modules/tablesorter/dist/js/extras/jquery.tablesorter.pager.min.js
-
-spiderfoot/static/node_modules/d3/*
-
-!spiderfoot/static/node_modules/d3/
-!spiderfoot/static/node_modules/d3/d3.min.js
-
-# Compiled source #
-###################
+# Python bytecode / compiled artifacts
 __pycache__/
+*.py[cod]
+*$py.class
 *.com
 *.class
 *.dll
 *.exe
 *.o
 *.so
-*.py[cod]
-*$py.class
 
 # Distribution / packaging
 .Python
@@ -109,10 +40,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Packages #
-############
-# it's better to unpack these files and commit the raw source
-# git has its own built in compression methods
+# Archives / local release artifacts
 *.7z
 *.dmg
 *.gz
@@ -122,14 +50,12 @@ MANIFEST
 *.tar
 *.zip
 
-# Logs and databases #
-######################
+# Logs and databases
 *.log
 *.sqlite
 *.db
 
-# OS generated files #
-######################
+# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -140,36 +66,53 @@ Icon?
 ehthumbs.db
 Thumbs.db
 
-# Virtual environments #
-########################
+# Virtual environments
+.venv/
 venv/
 venv3/
+env/
+ENV/
 
-# IDE #
-#######
-.idea
-.vscode
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# Test & Coverage Reports #
-###########################
+# Test, type-check, lint, and coverage caches
 .coverage
+.coverage.*
 coverage/
-test/acceptance/results/
+coverage.xml
 htmlcov/
 report/
 .tox/
 .nox/
-.coverage
-.coverage.*
-.cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.pyre/
+.pytype/
 nosetests.xml
-coverage.xml
 *.cover
 *.py,cover
-.hypothesis/
-.pytest_cache/
 cover/
+test/acceptance/results/
 
-# Documentation #
-#################
+# Documentation builds
 docs/_build/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

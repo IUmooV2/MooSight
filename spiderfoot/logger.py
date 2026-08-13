@@ -6,20 +6,49 @@ from contextlib import suppress
 from logging.handlers import QueueHandler, QueueListener
 
 from spiderfoot import SpiderFootDb, SpiderFootHelpers
+from spiderfoot.security import redact_text
+
+
+class SecretRedactionFilter(logging.Filter):
+    """Redact credential-like values before records reach any log sink."""
+
+    def filter(self, record: 'logging.LogRecord') -> bool:
+        # Force interpolation before redaction so secrets passed via logging
+        # arguments cannot bypass the filter. Clear args afterward to prevent
+        # logging from applying them a second time.
+        record.msg = redact_text(record.getMessage())
+        record.args = ()
+
+        # ``exc_text`` is normally rendered by Formatter *after* filters run.
+        # Pre-render it here so secrets embedded in exception messages or
+        # tracebacks cannot bypass redaction on their way to console, file,
+        # SQLite, or cross-process queue sinks.
+        if getattr(record, "exc_info", None) and not getattr(record, "exc_text", None):
+            try:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            except Exception:
+                # Logging must never fail because traceback rendering failed.
+                # Use a conservative placeholder rather than exposing the raw
+                # exception through a fallback representation.
+                record.exc_text = "[REDACTED EXCEPTION]"
+
+        if getattr(record, "exc_text", None):
+            record.exc_text = redact_text(record.exc_text)
+        return True
 
 
 class SpiderFootSqliteLogHandler(logging.Handler):
     """Handler for logging to SQLite database.
 
-    This ensure all sqlite logging is done from a single
+    This ensures all sqlite logging is done from a single
     process and a single database handle.
     """
 
     def __init__(self, opts: dict) -> None:
-        """TBD.
+        """Initialize the SQLite log handler.
 
         Args:
-            opts (dict): TBD
+            opts (dict): SpiderFoot configuration.
         """
         self.opts = opts
         self.dbh = None
@@ -32,10 +61,10 @@ class SpiderFootSqliteLogHandler(logging.Handler):
         super().__init__()
 
     def emit(self, record: 'logging.LogRecord') -> None:
-        """TBD
+        """Queue a log event for insertion into SQLite.
 
         Args:
-            record (logging.LogRecord): Log event record
+            record (logging.LogRecord): Log event record.
         """
         if not self.shutdown_hook:
             atexit.register(self.logBatch)
@@ -52,16 +81,16 @@ class SpiderFootSqliteLogHandler(logging.Handler):
         batch = self.batch
         self.batch = []
         if self.dbh is None:
-            # Create a new database handle when the first log batch is processed
+            # Create a new database handle when the first log batch is processed.
             self.makeDbh()
         logResult = self.dbh.scanLogEvents(batch)
         if logResult is False:
-            # Try to recreate database handle if insert failed
+            # Try to recreate database handle if insert failed.
             self.makeDbh()
             self.dbh.scanLogEvents(batch)
 
     def makeDbh(self) -> None:
-        """TBD."""
+        """Create the database handle used for log persistence."""
         self.dbh = SpiderFootDb(self.opts)
 
 
@@ -74,21 +103,22 @@ def logListenerSetup(loggingQueue, opts: dict = None) -> 'logging.handlers.Queue
     Args:
         loggingQueue (Queue): Queue (accepts both normal and multiprocessing queue types)
                               Must be instantiated in the main process.
-        opts (dict): SpiderFoot config
+        opts (dict): SpiderFoot config.
 
     Returns:
-        spiderFootLogListener (logging.handlers.QueueListener): Log listener
+        spiderFootLogListener (logging.handlers.QueueListener): Log listener.
     """
     if opts is None:
         opts = dict()
     doLogging = opts.get("__logging", True)
     debug = opts.get("_debug", False)
     logLevel = (logging.DEBUG if debug else logging.INFO)
+    redaction_filter = SecretRedactionFilter()
 
-    # Log to terminal
+    # Log to terminal.
     console_handler = logging.StreamHandler(sys.stderr)
 
-    # Log debug messages to file
+    # Log debug messages to file.
     log_dir = SpiderFootHelpers.logPath()
     debug_handler = logging.handlers.TimedRotatingFileHandler(
         f"{log_dir}/spiderfoot.debug.log",
@@ -97,7 +127,7 @@ def logListenerSetup(loggingQueue, opts: dict = None) -> 'logging.handlers.Queue
         backupCount=30
     )
 
-    # Log error messages to file
+    # Log error messages to file.
     error_handler = logging.handlers.TimedRotatingFileHandler(
         f"{log_dir}/spiderfoot.error.log",
         when="d",
@@ -105,12 +135,15 @@ def logListenerSetup(loggingQueue, opts: dict = None) -> 'logging.handlers.Queue
         backupCount=30
     )
 
-    # Filter by log level
+    # Filter by log level and redact before any sink receives a record.
     console_handler.addFilter(lambda x: x.levelno >= logLevel)
     debug_handler.addFilter(lambda x: x.levelno >= logging.DEBUG)
     error_handler.addFilter(lambda x: x.levelno >= logging.WARN)
+    console_handler.addFilter(redaction_filter)
+    debug_handler.addFilter(redaction_filter)
+    error_handler.addFilter(redaction_filter)
 
-    # Set log format
+    # Set log format.
     log_format = logging.Formatter("%(asctime)s [%(levelname)s] %(module)s : %(message)s")
     debug_format = logging.Formatter("%(asctime)s [%(levelname)s] %(filename)s:%(lineno)s : %(message)s")
     console_handler.setFormatter(log_format)
@@ -126,6 +159,7 @@ def logListenerSetup(loggingQueue, opts: dict = None) -> 'logging.handlers.Queue
         sqlite_handler = SpiderFootSqliteLogHandler(opts)
         sqlite_handler.setLevel(logLevel)
         sqlite_handler.setFormatter(log_format)
+        sqlite_handler.addFilter(redaction_filter)
         handlers.append(sqlite_handler)
     spiderFootLogListener = QueueListener(loggingQueue, *handlers)
     spiderFootLogListener.start()
@@ -134,28 +168,31 @@ def logListenerSetup(loggingQueue, opts: dict = None) -> 'logging.handlers.Queue
 
 
 def logWorkerSetup(loggingQueue) -> 'logging.Logger':
-    """Root SpiderFoot logger.
+    """Configure the root SpiderFoot logger.
 
     Args:
-        loggingQueue (Queue): TBD
+        loggingQueue (Queue): Queue used to forward worker log records.
 
     Returns:
-        logging.Logger: Logger
+        logging.Logger: SpiderFoot logger.
     """
     log = logging.getLogger("spiderfoot")
-    # Don't do this more than once
+    # Don't do this more than once.
     if len(log.handlers) == 0:
         log.setLevel(logging.DEBUG)
         queue_handler = QueueHandler(loggingQueue)
+        # Redact before a record crosses a process boundary. The listener also
+        # applies the filter as defense in depth for records from legacy paths.
+        queue_handler.addFilter(SecretRedactionFilter())
         log.addHandler(queue_handler)
     return log
 
 
 def stop_listener(listener: 'logging.handlers.QueueListener') -> None:
-    """TBD.
+    """Stop a log listener without propagating shutdown-time exceptions.
 
     Args:
-        listener: (logging.handlers.QueueListener): TBD
+        listener: QueueListener instance.
     """
     with suppress(Exception):
         listener.stop()
