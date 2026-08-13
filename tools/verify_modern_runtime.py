@@ -79,6 +79,12 @@ def verify_runtime() -> list[Check]:
         "sfwebui.py core construction is routed to ModernSpiderFoot",
         "sfwebui.py still constructs the legacy SpiderFoot core",
     ))
+    checks.append(_result(
+        "web startscan exposure",
+        bool(getattr(ModernSpiderFootWebUi.startscan, "exposed", False)),
+        "modern startscan handler is exposed to CherryPy",
+        "modern startscan handler is not exposed to CherryPy and would return HTTP 404",
+    ))
 
     mro = ModernSpiderFoot.__mro__
     checks.append(_result(
