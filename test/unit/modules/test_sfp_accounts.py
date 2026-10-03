@@ -207,6 +207,32 @@ class TestModuleAccounts(unittest.TestCase):
         module.checkSite('alice', site)
         self.assertEqual(module.siteHealth['Example']['ambiguous'], 1)
 
+    def test_heuristic_match_rejects_username_substrings_in_other_handles(self):
+        module = self._module_for_site_check({
+            'content': '<p>malice</p><p>alice_2024</p><p>profile-alicex</p>',
+            'code': '200', 'headers': {'content-type': 'text/html'}})
+        site = {
+            'name': 'Heuristic Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': '', 'm_string': 'not found'}
+
+        module.checkSite('alice', site)
+
+        self.assertFalse(any(module.siteResults.values()))
+        self.assertEqual(module.siteHealth['Heuristic Example']['ambiguous'], 1)
+
+    def test_heuristic_match_accepts_username_as_complete_url_path_token(self):
+        module = self._module_for_site_check({
+            'content': '<a href="https://example.com/alice?tab=posts">Profile</a>',
+            'code': '200', 'headers': {'content-type': 'text/html'}})
+        site = {
+            'name': 'Heuristic Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': '', 'm_string': 'not found'}
+
+        module.checkSite('alice', site)
+
+        self.assertTrue(any(module.siteResults.values()))
+        self.assertEqual(module.siteHealth['Heuristic Example']['positive'], 1)
+
     def test_check_site_formats_account_in_post_body(self):
         module = self._module_for_site_check({
             'content': '"id":123', 'code': '200', 'headers': {'content-type': 'application/json'}})

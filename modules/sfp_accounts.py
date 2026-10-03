@@ -11,6 +11,7 @@
 
 import json
 import random
+import re
 import threading
 import time
 from queue import Empty as QueueEmpty
@@ -145,6 +146,22 @@ class sfp_accounts(SpiderFootPlugin):
             if str(key).lower() == wanted:
                 return value
         return ''
+
+    @staticmethod
+    def _contains_username(content, username):
+        """Match a username as a complete handle token, not a substring.
+
+        Args:
+            content (str): Text returned by the account-check endpoint.
+            username (str): Username being checked.
+
+        Returns:
+            bool: True when the username appears outside another handle token.
+        """
+        if not isinstance(content, str) or not username:
+            return False
+        pattern = rf"(?<![\w.-]){re.escape(username)}(?![\w.-])"
+        return re.search(pattern, content, re.IGNORECASE) is not None
 
     @staticmethod
     def _format_site_value(value, account):
@@ -300,7 +317,7 @@ class sfp_accounts(SpiderFootPlugin):
         if self.opts['musthavename'] and not expected:
             ctype = str(self._header(res.get('headers'), 'content-type')).lower()
             textual = not ctype or any(t in ctype for t in ('text/', 'json', 'javascript', 'xml'))
-            if textual and name.lower() not in content.lower():
+            if textual and not self._contains_username(content, name):
                 self.debug(f"Skipping {site['name']} because the username was not present in the response.")
                 self._set_site_result(retname, False, site, 'ambiguous', 'username absent from heuristic response')
                 return
