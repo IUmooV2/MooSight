@@ -278,15 +278,19 @@ class sfp_accounts(SpiderFootPlugin):
         expected = site.get('e_string')
         missing = site.get('m_string')
 
-        if missing and missing in content:
-            self._set_site_result(retname, False, site, 'negative', 'known missing-account fingerprint matched')
+        expected_status_matches = expected_code is not None and code == str(expected_code)
+        missing_status_matches = missing_code is not None and code == str(missing_code)
+
+        if missing_status_matches and not expected_status_matches:
+            self._set_site_result(retname, False, site, 'negative', f'known missing-account HTTP status {code}')
             return
 
-        if expected_code != missing_code and code != str(expected_code):
-            if missing_code is not None and code == str(missing_code):
-                self._set_site_result(retname, False, site, 'negative', f'known missing-account HTTP status {code}')
-            else:
-                self._set_site_result(retname, False, site, 'ambiguous', f'unexpected HTTP status {code or "unknown"}')
+        if expected_code is not None and not expected_status_matches:
+            self._set_site_result(retname, False, site, 'ambiguous', f'unexpected HTTP status {code or "unknown"}')
+            return
+
+        if missing and missing in content:
+            self._set_site_result(retname, False, site, 'negative', 'known missing-account fingerprint matched')
             return
 
         if expected and expected not in content:

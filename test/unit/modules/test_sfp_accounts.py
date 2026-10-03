@@ -152,6 +152,42 @@ class TestModuleAccounts(unittest.TestCase):
         self.assertEqual(module.siteHealth['Example']['ambiguous'], 1)
         self.assertIn('403', module.siteHealth['Example']['last_detail'])
 
+    def test_same_positive_and_missing_status_still_rejects_unexpected_status(self):
+        module = self._module_for_site_check({
+            'content': 'PROFILE EXISTS', 'code': '403', 'headers': {'content-type': 'text/html'}})
+        site = {
+            'name': 'Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 200, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
+
+        module.checkSite('alice', site)
+
+        self.assertFalse(any(module.siteResults.values()))
+        self.assertEqual(module.siteHealth['Example']['ambiguous'], 1)
+
+    def test_unexpected_status_takes_precedence_over_missing_page_text(self):
+        module = self._module_for_site_check({
+            'content': 'NOT FOUND', 'code': '403', 'headers': {'content-type': 'text/html'}})
+        site = {
+            'name': 'Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
+
+        module.checkSite('alice', site)
+
+        self.assertFalse(any(module.siteResults.values()))
+        self.assertEqual(module.siteHealth['Example']['ambiguous'], 1)
+
+    def test_known_missing_status_is_negative_even_when_body_changes(self):
+        module = self._module_for_site_check({
+            'content': 'Request was handled normally', 'code': '404', 'headers': {'content-type': 'text/html'}})
+        site = {
+            'name': 'Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
+
+        module.checkSite('alice', site)
+
+        self.assertFalse(any(module.siteResults.values()))
+        self.assertEqual(module.siteHealth['Example']['negative'], 1)
+
     def test_network_failure_records_site_error(self):
         module = self._module_for_site_check(None)
         site = {
