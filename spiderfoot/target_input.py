@@ -31,19 +31,23 @@ def _username_from_profile_url(value: str) -> str | None:
     parts = [part for part in parsed.path.split("/") if part]
     username = None
 
-    if host == "instagram.com" and len(parts) == 1 and parts[0].lower() not in {"accounts", "explore", "p", "reel", "stories"}:
+    if (
+        host == "instagram.com"
+        and len(parts) == 1
+        and parts[0].lower() not in {"accounts", "explore", "p", "reel", "stories"}
+    ) or (host in {"x.com", "twitter.com", "github.com", "twitch.tv", "paypal.me"} and len(parts) == 1):
         username = parts[0]
-    elif host in {"x.com", "twitter.com", "github.com", "twitch.tv", "paypal.me"} and len(parts) == 1:
-        username = parts[0]
-    elif host == "tiktok.com" and len(parts) == 1 and parts[0].startswith("@"):
+    elif (
+        host in {"tiktok.com", "threads.net", "threads.com"}
+        and len(parts) == 1
+        and parts[0].startswith("@")
+    ):
         username = parts[0][1:]
-    elif host in {"threads.net", "threads.com"} and len(parts) == 1 and parts[0].startswith("@"):
-        username = parts[0][1:]
-    elif host == "reddit.com" and len(parts) == 2 and parts[0].lower() in {"u", "user"}:
-        username = parts[1]
-    elif host == "bsky.app" and len(parts) == 2 and parts[0].lower() == "profile":
-        username = parts[1]
-    elif host in {"venmo.com", "account.venmo.com"} and len(parts) == 2 and parts[0].lower() == "u":
+    elif (
+        (host == "reddit.com" and len(parts) == 2 and parts[0].lower() in {"u", "user"})
+        or (host == "bsky.app" and len(parts) == 2 and parts[0].lower() == "profile")
+        or (host in {"venmo.com", "account.venmo.com"} and len(parts) == 2 and parts[0].lower() == "u")
+    ):
         username = parts[1]
 
     return _quote_username(username) if username else None
@@ -54,8 +58,16 @@ def normalize_scan_target(value: str, *, recognized_type: str | None = None) -> 
 
     Existing quoted targets and targets already recognized by SpiderFoot remain
     unchanged. Explicit ``@username`` and supported profile URLs are always
-    normalized. A bare username token is normalized only when SpiderFoot could
-    not recognize it as another target type.
+    normalized. Bare username tokens are normalized when SpiderFoot cannot
+    recognize them as another target type, including numeric final labels that
+    the legacy parser misclassifies as internet names.
+
+    Args:
+        value: The target entered by the user.
+        recognized_type: The target type returned by SpiderFoot's legacy parser.
+
+    Returns:
+        A scan target in a format accepted by SpiderFoot.
     """
     if not isinstance(value, str):
         return value
@@ -71,6 +83,17 @@ def normalize_scan_target(value: str, *, recognized_type: str | None = None) -> 
     profile_username = _username_from_profile_url(value)
     if profile_username:
         return profile_username
+
+    # SpiderFoot's legacy target parser accepts numeric final labels as
+    # INTERNET_NAME values, but social usernames commonly end in digits after
+    # a dot (for example, "sonrie.99"). A numeric final label cannot be a
+    # registered DNS top-level domain, so prefer the username interpretation.
+    if (
+        recognized_type == "INTERNET_NAME"
+        and _USERNAME_RE.fullmatch(value)
+        and value.rsplit(".", 1)[-1].isdigit()
+    ):
+        return _quote_username(value) or value
 
     if recognized_type is None:
         return _quote_username(value) or value

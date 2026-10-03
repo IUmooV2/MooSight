@@ -73,9 +73,11 @@ class TestTLSHelpers(unittest.TestCase):
 
         raw.close.assert_called_once_with()
 
-    def test_open_tls_socket_rejects_wrong_settings_type(self):
+    @patch('spiderfoot.tls.open_tcp_socket')
+    def test_open_tls_socket_rejects_wrong_settings_type_before_connecting(self, open_socket):
         with self.assertRaises(TypeError):
             open_tls_socket('example.com', 443, settings={})
+        open_socket.assert_not_called()
 
     @patch('spiderfoot.tls.open_tls_socket')
     def test_create_tls_socket_preserves_mixin_calling_convention(self, open_socket):

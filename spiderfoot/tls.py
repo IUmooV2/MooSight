@@ -68,8 +68,9 @@ def open_tls_socket(
     The caller owns the returned socket and should close it using a context
     manager or ``close()``.
     """
-    settings = settings or TLSSettings(server_hostname=host)
-    if not isinstance(settings, TLSSettings):
+    if settings is None:
+        settings = TLSSettings(server_hostname=host)
+    elif not isinstance(settings, TLSSettings):
         raise TypeError("settings must be TLSSettings")
 
     server_hostname = settings.server_hostname or host

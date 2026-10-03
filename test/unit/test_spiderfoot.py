@@ -1,6 +1,8 @@
 # test_spiderfoot.py
+import socket
 import pytest
 import unittest
+from unittest.mock import Mock, patch
 
 from sflib import SpiderFoot
 
@@ -521,16 +523,17 @@ class TestSpiderFoot(unittest.TestCase):
         self.assertFalse(addrs)
         self.assertIsInstance(addrs, list)
 
-    def test_resolve_host6_should_return_a_list(self):
+    @patch('sflib.socket.getaddrinfo')
+    def test_resolve_host6_should_return_a_list(self, getaddrinfo):
         sf = SpiderFoot(self.default_options)
+        getaddrinfo.return_value = [
+            (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('2001:db8::1', 0, 0, 0))
+        ]
 
         addrs = sf.resolveHost6('one.one.one.one')
         self.assertIsInstance(addrs, list)
-        self.assertTrue(addrs)
-        # TODO: Re-enable this once GitHub runners support IPv6
-        # https://github.com/actions/virtual-environments/issues/668
-        # self.assertIn('2606:4700:4700::1001', addrs)
-        # self.assertIn('2606:4700:4700::1111', addrs)
+        self.assertEqual(addrs, ['2001:db8::1'])
+        getaddrinfo.assert_called_once_with('one.one.one.one', None, socket.AF_INET6)
 
         addrs = sf.resolveHost6(None)
         self.assertFalse(addrs)
@@ -671,21 +674,55 @@ class TestSpiderFoot(unittest.TestCase):
         self.assertTrue(sf.useProxyForUrl('spiderfoot.net'))
         self.assertTrue(sf.useProxyForUrl('1.1.1.1'))
 
-    def test_fetchUrl_argument_url_should_return_http_response_as_dict(self):
+    @patch('sflib.SpiderFoot.getSession')
+    def test_fetchUrl_argument_url_should_return_http_response_as_dict(self, get_session):
         sf = SpiderFoot(self.default_options)
+        response = Mock()
+        response.url = 'https://spiderfoot.net/'
+        response.status_code = 200
+        response.headers = {'content-type': 'text/html; charset=utf-8'}
+        response.content = b'<html>test response</html>'
+        session = Mock()
+        session.get.return_value = response
+        get_session.return_value = session
 
         res = sf.fetchUrl("https://spiderfoot.net/")
         self.assertIsInstance(res, dict)
         self.assertEqual(res['code'], "200")
-        self.assertNotEqual(res['content'], None)
+        self.assertEqual(res['content'], '<html>test response</html>')
+        session.get.assert_called_once()
 
-    def test_fetchUrl_argument_headOnly_should_return_http_response_as_dict(self):
+    @patch('sflib.SpiderFoot.getSession')
+    def test_fetchUrl_argument_headOnly_should_return_http_response_as_dict(self, get_session):
         sf = SpiderFoot(self.default_options)
+        response = Mock()
+        response.status_code = 301
+        response.headers = {
+            'content-length': '0',
+            'location': 'https://www.spiderfoot.net/',
+        }
+        session = Mock()
+        session.head.return_value = response
+        get_session.return_value = session
 
         res = sf.fetchUrl("https://spiderfoot.net/", headOnly=True)
         self.assertIsInstance(res, dict)
         self.assertEqual(res['code'], "301")
         self.assertEqual(res['content'], None)
+        self.assertEqual(res['realurl'], 'https://www.spiderfoot.net/')
+        session.head.assert_called_once()
+
+    @patch('sflib.SpiderFoot.getSession')
+    def test_fetchUrl_headOnly_network_error_returns_empty_response(self, get_session):
+        sf = SpiderFoot(self.default_options)
+        session = Mock()
+        session.head.side_effect = OSError('connection unavailable')
+        get_session.return_value = session
+
+        result = sf.fetchUrl('https://spiderfoot.net/', headOnly=True)
+
+        self.assertIsNone(result['code'])
+        self.assertIsNone(result['content'])
 
     def test_fetchUrl_argument_url_invalid_type_should_return_none(self):
         sf = SpiderFoot(self.default_options)

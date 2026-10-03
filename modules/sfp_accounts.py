@@ -49,8 +49,11 @@ class sfp_accounts(SpiderFootPlugin):
         "permutate": "Look for similar username permutations. This can be noisy and is disabled by default.",
         "usernamesize": "Minimum username length to query.",
         "allow_insecure_tls": "Allow account checks to bypass TLS certificate verification. Disabled by default.",
-        "_maxthreads": "Maximum concurrent account checks."
+        "_maxthreads": "Maximum concurrent account checks (1-50)."
     }
+
+    _DEFAULT_MAX_THREADS = 20
+    _MAX_THREADS = 50
 
     results = None
     reportedUsers = list()
@@ -327,8 +330,14 @@ class sfp_accounts(SpiderFootPlugin):
         for site in sites:
             queue.put(site)
 
+        try:
+            max_threads = int(self.opts.get('_maxthreads', self._DEFAULT_MAX_THREADS))
+        except (TypeError, ValueError, OverflowError):
+            max_threads = self._DEFAULT_MAX_THREADS
+        max_threads = min(max(max_threads, 1), self._MAX_THREADS)
+
         threads = []
-        for i in range(min(len(sites), int(self.opts['_maxthreads']))):
+        for i in range(min(len(sites), max_threads)):
             thread = threading.Thread(name=f'sfp_accounts_scan_{i}', target=processSiteQueue,
                                       args=(username, queue), daemon=True)
             thread.start()

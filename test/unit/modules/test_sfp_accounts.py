@@ -116,6 +116,21 @@ class TestModuleAccounts(unittest.TestCase):
         self.assertTrue(any(module.siteResults.values()))
         self.assertEqual(module.siteHealth['Example']['positive'], 1)
 
+    def test_check_sites_keeps_a_worker_for_invalid_thread_limits(self):
+        site = {
+            'name': 'Example', 'cat': 'social', 'uri_check': 'https://example.com/{account}',
+            'e_code': 200, 'm_code': 404, 'e_string': 'PROFILE EXISTS', 'm_string': 'NOT FOUND'}
+        response = {
+            'content': 'PROFILE EXISTS', 'code': '200',
+            'headers': {'content-type': 'text/plain'}}
+
+        for limit in (0, -1, None, 'invalid'):
+            with self.subTest(limit=limit):
+                module = self._module_for_site_check(response)
+                module.opts['_maxthreads'] = limit
+                self.assertEqual(len(module.checkSites('alice', [site], persist_health=False)), 1)
+                self.assertEqual(module.siteHealth['Example']['positive'], 1)
+
     def test_known_missing_fingerprint_records_clean_negative(self):
         module = self._module_for_site_check({
             'content': 'NOT FOUND', 'code': '200', 'headers': {'content-type': 'text/html'}})

@@ -48,7 +48,7 @@ class TestSf(unittest.TestCase):
         out, err, code = self.execute([sys.executable, "sf.py"])
         self.assertIn(b"SpiderFoot requires -l <ip>:<port> to start the web server. Try --help for guidance.", out)
         self.assertEqual(b"", err)
-        self.assertEqual(255, code)
+        self.assertEqual(255, code & 0xFF)
 
     def test_help_arg_should_print_help_and_exit(self):
         out, err, code = self.execute([sys.executable, "sf.py", "-h"])
@@ -88,17 +88,17 @@ class TestSf(unittest.TestCase):
         invalid_target = '.'
         out, err, code = self.execute([sys.executable, "sf.py", "-s", invalid_target])
         self.assertIn(bytes(f"Could not determine target type. Invalid target: {invalid_target}", 'utf-8'), err)
-        self.assertEqual(255, code)
+        self.assertEqual(255, code & 0xFF)
 
     def test_run_scan_with_modules_no_target_should_exit(self):
         out, err, code = self.execute([sys.executable, "sf.py", "-m", ",".join(self.default_modules)])
         self.assertIn(b"You must specify a target when running in scan mode", err)
-        self.assertEqual(255, code)
+        self.assertEqual(255, code & 0xFF)
 
     def test_run_scan_with_types_no_target_should_exit(self):
         out, err, code = self.execute([sys.executable, "sf.py", "-t", ",".join(self.default_types)])
         self.assertIn(b"You must specify a target when running in scan mode", err)
-        self.assertEqual(255, code)
+        self.assertEqual(255, code & 0xFF)
 
     def test_run_scan_with_invalid_module_should_run_scan_and_exit(self):
         module = "invalid module"
@@ -109,7 +109,7 @@ class TestSf(unittest.TestCase):
     def test_run_scan_with_invalid_type_should_exit(self):
         out, err, code = self.execute([sys.executable, "sf.py", "-t", "invalid type", "-s", "spiderfoot.net"])
         self.assertIn(b"Based on your criteria, no modules were enabled", err)
-        self.assertEqual(255, code)
+        self.assertEqual(255, code & 0xFF)
 
     def test_run_scan_should_run_scan_and_exit(self):
         target = "spiderfoot.net"

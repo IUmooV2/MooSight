@@ -17,6 +17,12 @@ class TestTargetInput(unittest.TestCase):
     def test_preserves_recognized_target(self):
         self.assertEqual(normalize_scan_target('example.com', recognized_type='INTERNET_NAME'), 'example.com')
 
+    def test_normalizes_bare_username_with_numeric_suffix_even_if_parser_calls_it_a_domain(self):
+        self.assertEqual(
+            normalize_scan_target('sonrie.99', recognized_type='INTERNET_NAME'),
+            '"sonrie.99"',
+        )
+
     def test_normalizes_supported_profile_urls(self):
         cases = {
             'https://www.instagram.com/sonrie.99/': '"sonrie.99"',

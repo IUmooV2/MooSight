@@ -1,17 +1,23 @@
 # test_sfwebui.py
+import json
 import os
+import time
 import unittest
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import cherrypy
 from cherrypy.test import helper
 
+from moosight import install_modern_core
 from spiderfoot import SpiderFootHelpers
-from sfwebui import SpiderFootWebUi
+from spiderfoot.modern_webui import ModernSpiderFootWebUi
 
 
 class TestSpiderFootWebUiRoutes(helper.CPWebCase):
     @staticmethod
     def setup_server():
+        install_modern_core()
+
         default_config = {
             '_debug': False,  # Debug
             '__logging': True,  # Logging in general
@@ -19,12 +25,13 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
             '_useragent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0',  # User-Agent to use for HTTP requests
             '_dnsserver': '',  # Override the default resolver
             '_fetchtimeout': 5,  # number of seconds before giving up on a fetch
-            '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
+            '_internettlds': 'com\nnet\norg\nio',
             '_internettlds_cache': 72,
             '_genericusers': ",".join(SpiderFootHelpers.usernamesFromWordlists(['generic-usernames'])),
             '__database': f"{SpiderFootHelpers.dataPath()}/spiderfoot.test.db",  # note: test database file
             '__modules__': None,  # List of modules. Will be set after start-up.
-            '__correlationrules__': None,  # List of correlation rules. Will be set after start-up.
+            '__correlationrules__': [],  # List of correlation rules. Will be set after start-up.
+            '__globaloptdescs__': {},  # Descriptions for global settings displayed in scan options.
             '_socks1type': '',
             '_socks2addr': '',
             '_socks3port': '',
@@ -52,7 +59,7 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
             }
         }
 
-        cherrypy.tree.mount(SpiderFootWebUi(default_web_config, default_config), script_name=default_web_config.get('root'), config=conf)
+        cherrypy.tree.mount(ModernSpiderFootWebUi(default_web_config, default_config), script_name=default_web_config.get('root'), config=conf)
 
     def test_invalid_page_returns_404(self):
         self.getPage("/doesnotexist")
@@ -188,7 +195,7 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
         self.assertInBody('Invalid request: scan target was not specified.')
 
     def test_startscan_unrecognized_scan_target_returns_error(self):
-        self.getPage("/startscan?scanname=example-scan&scantarget=invalid-target&modulelist=doesnotexist&typelist=doesnotexist&usecase=doesnotexist")
+        self.getPage("/startscan?scanname=example-scan&scantarget=invalid/target&modulelist=doesnotexist&typelist=doesnotexist&usecase=doesnotexist")
         self.assertStatus('200 OK')
         self.assertInBody('Invalid target type. Could not recognize it as a target SpiderFoot supports.')
 
@@ -205,6 +212,53 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
     def test_startscan_should_start_a_scan(self):
         self.getPage("/startscan?scanname=spiderfoot.net&scantarget=spiderfoot.net&modulelist=doesnotexist&typelist=doesnotexist&usecase=doesnotexist")
         self.assertStatus('303 See Other')
+
+    def test_startscan_bare_instagram_username_post_reaches_scan_page(self):
+        form = urlencode({
+            'scanname': 'instagram-username-scan',
+            'scantarget': 'sonrie.99',
+            'modulelist': 'sfp__stor_db',
+            'typelist': '',
+            'usecase': '',
+        })
+        self.getPage(
+            '/startscan',
+            method='POST',
+            body=form,
+        )
+        self.assertEqual(self.status, '303 See Other')
+
+        location = self.assertHeader('Location')
+        parsed_location = urlparse(location)
+        self.assertEqual(parsed_location.path, '/scaninfo')
+        scan_id = parse_qs(parsed_location.query).get('id', [''])[0]
+        self.assertTrue(scan_id, location)
+
+        self.getPage(f'{parsed_location.path}?{parsed_location.query}')
+        self.assertEqual(self.status, '200 OK')
+        page = self.body.decode('utf-8', errors='replace')
+        self.assertIn('instagram-username-scan', page)
+        self.assertIn("id='scanstatusbadge'", page)
+
+        self.getPage(f'/scanopts?id={scan_id}')
+        self.assertEqual(self.status, '200 OK')
+        scan_meta = json.loads(self.body.decode('utf-8'))['meta']
+        self.assertEqual(scan_meta[1], 'sonrie.99')
+
+        # The scan runs asynchronously. Confirm the seed reached SpiderFoot as
+        # a USERNAME event, not as an INTERNET_NAME accepted by the legacy
+        # parser because its final label contains digits.
+        deadline = time.monotonic() + 5
+        username_event_found = False
+        while time.monotonic() < deadline:
+            self.getPage(f'/scaneventresults?id={scan_id}&eventType=USERNAME')
+            self.assertEqual(self.status, '200 OK')
+            events = json.loads(self.body.decode('utf-8'))
+            if any(event[1] == 'sonrie.99' and event[-1] == 'USERNAME' for event in events):
+                username_event_found = True
+                break
+            time.sleep(0.1)
+        self.assertTrue(username_event_found, 'The scan did not store the bare Instagram username as a USERNAME seed.')
 
     def test_stopscan_invalid_scan_id_returns_404(self):
         self.getPage("/stopscan?id=doesnotexist")

@@ -43,7 +43,7 @@ class TestVerifyExceptionPolicy(unittest.TestCase):
             modern_file.write_text("try:\n    run()\nexcept Exception:\n    pass\n", encoding="utf-8")
             legacy_file.write_text("try:\n    run()\nexcept BaseException:\n    pass\n", encoding="utf-8")
 
-            with patch("tools.verify_exception_policy.MODERN_FILES", ("modern.py",)):
+            with patch("tools.verify_exception_policy.MODERN_PYTHON_FILES", ("modern.py",)):
                 result = verify_exception_policy(root)
 
             self.assertTrue(result.ok)
@@ -57,7 +57,7 @@ class TestVerifyExceptionPolicy(unittest.TestCase):
             path = root / "modern.py"
             path.write_text("try:\n    run()\nexcept BaseException:\n    pass\n", encoding="utf-8")
 
-            with patch("tools.verify_exception_policy.MODERN_FILES", ("modern.py",)):
+            with patch("tools.verify_exception_policy.MODERN_PYTHON_FILES", ("modern.py",)):
                 result = verify_exception_policy(root)
 
             self.assertFalse(result.ok)
