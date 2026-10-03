@@ -1,0 +1,247 @@
+import ssl
+import unittest
+import warnings
+from unittest.mock import Mock
+
+import requests
+import urllib3
+
+from spiderfoot.config import NetworkConfig
+from spiderfoot.network import (
+    NetworkResult,
+    NetworkState,
+    ScopedInsecureRequestWarnings,
+    build_session,
+    build_session_from_config,
+    classify_exception,
+    classify_http_status,
+    request_url,
+    request_with_config,
+)
+
+
+class TestNetworkPrimitives(unittest.TestCase):
+
+    def test_http_status_classification(self):
+        expectations = {
+            200: NetworkState.SUCCESS,
+            302: NetworkState.SUCCESS,
+            401: NetworkState.AUTH_REQUIRED,
+            403: NetworkState.BLOCKED,
+            404: NetworkState.NOT_FOUND,
+            429: NetworkState.RATE_LIMITED,
+            500: NetworkState.INVALID_RESPONSE,
+            None: NetworkState.INDETERMINATE,
+        }
+        for status, expected in expectations.items():
+            with self.subTest(status=status):
+                self.assertEqual(classify_http_status(status), expected)
+
+    def test_exception_classification(self):
+        values = [
+            (requests.exceptions.SSLError("bad tls"), NetworkState.TLS_ERROR),
+            (requests.exceptions.Timeout("slow"), NetworkState.TIMEOUT),
+            (requests.exceptions.ConnectionError("down"), NetworkState.NETWORK_ERROR),
+            (ValueError("unexpected"), NetworkState.INDETERMINATE),
+        ]
+        for exc, expected in values:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(classify_exception(exc), expected)
+
+    def test_network_result_ok_only_for_success(self):
+        self.assertTrue(NetworkResult(NetworkState.SUCCESS).ok)
+        self.assertFalse(NetworkResult(NetworkState.NOT_FOUND).ok)
+        self.assertFalse(NetworkResult(NetworkState.INDETERMINATE).ok)
+
+    def test_build_session_scopes_proxy_to_session(self):
+        session = build_session("socks5://127.0.0.1:9050")
+        self.assertIsInstance(session, requests.Session)
+        self.assertEqual(session.proxies["http"], "socks5://127.0.0.1:9050")
+        self.assertEqual(session.proxies["https"], "socks5://127.0.0.1:9050")
+
+    def test_build_session_from_config_uses_validated_proxy(self):
+        config = NetworkConfig.from_legacy({
+            "_socks1type": "5",
+            "_socks2addr": "127.0.0.1",
+            "_socks3port": "9050",
+            "_socks4user": "alice",
+            "_socks5pwd": "p@ss word",
+        })
+        session = build_session_from_config(config)
+        expected = "socks5://alice:p%40ss%20word@127.0.0.1:9050"
+        self.assertEqual(session.proxies["http"], expected)
+        self.assertEqual(session.proxies["https"], expected)
+
+    def test_build_session_from_config_rejects_wrong_type(self):
+        with self.assertRaises(TypeError):
+            build_session_from_config({})
+
+    def test_build_session_does_not_mutate_default_ssl_context(self):
+        before = ssl._create_default_https_context
+        build_session()
+        self.assertIs(ssl._create_default_https_context, before)
+
+    def test_build_session_uses_bounded_retry_policy(self):
+        session = build_session(retries=3, backoff_factor=0.5)
+        retries = session.get_adapter("https://").max_retries
+
+        self.assertEqual(retries.total, 3)
+        self.assertEqual(retries.connect, 3)
+        self.assertEqual(retries.read, 3)
+        self.assertEqual(retries.status, 3)
+        self.assertEqual(retries.backoff_factor, 0.5)
+        self.assertTrue(retries.respect_retry_after_header)
+        self.assertIn(429, retries.status_forcelist)
+        self.assertIn(503, retries.status_forcelist)
+
+    def test_build_session_does_not_retry_post_by_default(self):
+        session = build_session()
+        retries = session.get_adapter("https://").max_retries
+        allowed_methods = {method.upper() for method in retries.allowed_methods}
+
+        self.assertIn("GET", allowed_methods)
+        self.assertIn("HEAD", allowed_methods)
+        self.assertNotIn("POST", allowed_methods)
+
+    def test_build_session_rejects_invalid_retry_configuration(self):
+        with self.assertRaises(ValueError):
+            build_session(retries=-1)
+        with self.assertRaises(ValueError):
+            build_session(backoff_factor=-0.1)
+
+    def test_insecure_warning_suppression_is_scoped(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            warnings.warn("before", urllib3.exceptions.InsecureRequestWarning)
+            with ScopedInsecureRequestWarnings():
+                warnings.warn("inside", urllib3.exceptions.InsecureRequestWarning)
+            warnings.warn("after", urllib3.exceptions.InsecureRequestWarning)
+
+        messages = [str(item.message) for item in caught]
+        self.assertIn("before", messages)
+        self.assertNotIn("inside", messages)
+        self.assertIn("after", messages)
+
+    def _mock_session_response(self, status=200, content=b"ok", url="https://example.com/"):
+        session = requests.Session()
+        response = Mock()
+        response.status_code = status
+        response.content = content
+        response.url = url
+        response.headers = {"Content-Type": "text/plain"}
+        session.request = Mock(return_value=response)
+        return session
+
+    def test_request_url_verifies_tls_by_default(self):
+        session = self._mock_session_response()
+        result = request_url(session, "GET", "https://example.com/")
+
+        self.assertEqual(result.state, NetworkState.SUCCESS)
+        self.assertTrue(result.tls_verified)
+        self.assertEqual(result.content, b"ok")
+        self.assertTrue(session.request.call_args.kwargs["verify"])
+
+    def test_request_url_allows_explicit_unverified_request_without_global_tls_mutation(self):
+        session = self._mock_session_response()
+        before = ssl._create_default_https_context
+
+        result = request_url(session, "GET", "https://example.com/", verify=False)
+
+        self.assertEqual(result.state, NetworkState.SUCCESS)
+        self.assertFalse(result.tls_verified)
+        self.assertFalse(session.request.call_args.kwargs["verify"])
+        self.assertIs(ssl._create_default_https_context, before)
+
+    def test_request_url_distinguishes_timeout_from_not_found(self):
+        session = requests.Session()
+        session.request = Mock(side_effect=requests.exceptions.Timeout("slow"))
+
+        result = request_url(session, "GET", "https://example.com/")
+
+        self.assertEqual(result.state, NetworkState.TIMEOUT)
+        self.assertNotEqual(result.state, NetworkState.NOT_FOUND)
+
+    def test_request_url_redacts_credentials_from_returned_url(self):
+        session = requests.Session()
+        session.request = Mock(side_effect=requests.exceptions.ConnectionError("offline"))
+
+        result = request_url(
+            session,
+            "GET",
+            "https://alice:secret@example.com/api?token=abc123&query=safe",
+        )
+
+        self.assertEqual(result.state, NetworkState.NETWORK_ERROR)
+        self.assertNotIn("alice", result.url)
+        self.assertNotIn("secret", result.url)
+        self.assertNotIn("abc123", result.url)
+        self.assertIn("query=safe", result.url)
+
+    def test_request_url_classifies_rate_limit(self):
+        session = self._mock_session_response(status=429, content=b"slow down")
+        result = request_url(session, "GET", "https://example.com/")
+        self.assertEqual(result.state, NetworkState.RATE_LIMITED)
+        self.assertEqual(result.status_code, 429)
+
+    def test_request_url_marks_oversized_response_invalid(self):
+        session = self._mock_session_response(content=b"0123456789")
+        result = request_url(session, "GET", "https://example.com/", size_limit=4)
+        self.assertEqual(result.state, NetworkState.INVALID_RESPONSE)
+        self.assertIsNone(result.content)
+
+    def test_request_url_rejects_negative_size_limit_before_request(self):
+        session = self._mock_session_response()
+        with self.assertRaises(ValueError):
+            request_url(session, "GET", "https://example.com/", size_limit=-1)
+        session.request.assert_not_called()
+
+    def test_request_url_rejects_unsupported_method(self):
+        session = requests.Session()
+        with self.assertRaises(ValueError):
+            request_url(session, "TRACE", "https://example.com/")
+
+    def test_request_with_config_applies_timeout_and_default_user_agent(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        result = request_with_config(config, "GET", "https://example.com/", session=session)
+
+        self.assertTrue(result.ok)
+        kwargs = session.request.call_args.kwargs
+        self.assertEqual(kwargs["timeout"], 7)
+        self.assertEqual(kwargs["headers"]["User-Agent"], "MooSight-Test")
+
+    def test_request_with_config_honors_explicit_timeout_override(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        result = request_with_config(
+            config,
+            "GET",
+            "https://example.com/",
+            session=session,
+            timeout=2.5,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(session.request.call_args.kwargs["timeout"], 2.5)
+
+    def test_request_with_config_preserves_explicit_user_agent(self):
+        config = NetworkConfig(timeout=7, user_agent="MooSight-Test")
+        session = self._mock_session_response()
+
+        request_with_config(
+            config,
+            "GET",
+            "https://example.com/",
+            session=session,
+            headers={"user-agent": "Custom-Agent"},
+        )
+
+        headers = session.request.call_args.kwargs["headers"]
+        self.assertEqual(headers["user-agent"], "Custom-Agent")
+        self.assertNotIn("User-Agent", headers)
+
+    def test_request_with_config_rejects_wrong_type(self):
+        with self.assertRaises(TypeError):
+            request_with_config({}, "GET", "https://example.com/")

@@ -17,6 +17,14 @@ body {
   padding-right: 20px;
 }
 
+.navbar-default .navbar-brand.moosight-wordmark {
+  color: #315f6b;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 35px;
+}
+
 .spiderfoot-header-image {
   height: 35px;
   padding-top: 5px;

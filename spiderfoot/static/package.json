@@ -1,4 +1,14 @@
 {
+  "name": "moosight-frontend",
+  "private": true,
+  "version": "0.1.0-dev",
+  "description": "Frontend dependencies for the MooSight web interface.",
+  "scripts": {
+    "verify": "node verify-assets.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "alertifyjs": "^1.13.1",
     "bootstrap": "^3.4.1",

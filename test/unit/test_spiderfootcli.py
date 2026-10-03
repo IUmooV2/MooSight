@@ -1,8 +1,12 @@
 # test_spiderfootcli.py
 import io
+import os
+import tempfile
 import pytest
 import sys
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from sfcli import SpiderFootCli
 
@@ -119,7 +123,7 @@ class TestSpiderFootCli(unittest.TestCase):
         """
         sfcli = SpiderFootCli()
 
-        sfcli.ownopts['cli.spool_file'] = '/dev/null'
+        sfcli.ownopts['cli.spool_file'] = os.devnull
 
         sfcli.do_spool(None)
         initial_spool_state = sfcli.ownopts['cli.spool']
@@ -140,6 +144,28 @@ class TestSpiderFootCli(unittest.TestCase):
         new_history_state = sfcli.ownopts['cli.history']
 
         self.assertNotEqual(initial_history_state, new_history_state)
+
+    def test_do_history_lists_saved_commands_without_readline(self):
+        sfcli = SpiderFootCli()
+        with tempfile.TemporaryDirectory() as tempdir:
+            history_path = Path(tempdir) / 'history.txt'
+            history_path.write_text('scan example.com\n', encoding='utf-8')
+            sfcli.ownopts['cli.history_file'] = str(history_path)
+
+            with patch('sfcli.readline', None), patch.object(sfcli, 'dprint') as dprint:
+                sfcli.do_history('-l')
+
+        dprint.assert_called_once_with('scan example.com', plain=True)
+
+    def test_cli_instances_do_not_share_mutable_state(self):
+        first = SpiderFootCli()
+        second = SpiderFootCli()
+
+        first.ownopts['cli.debug'] = True
+        first.types.append('DOMAIN_NAME')
+
+        self.assertFalse(second.ownopts['cli.debug'])
+        self.assertNotIn('DOMAIN_NAME', second.types)
 
     def test_precmd_should_return_line(self):
         """
@@ -180,7 +206,7 @@ class TestSpiderFootCli(unittest.TestCase):
         sfcli = SpiderFootCli()
         sfcli.ownopts['cli.history'] = False
         sfcli.ownopts['cli.spool'] = True
-        sfcli.ownopts['cli.spool_file'] = '/dev/null'
+        sfcli.ownopts['cli.spool_file'] = os.devnull
 
         line = "example line"
 
@@ -369,7 +395,9 @@ class TestSpiderFootCli(unittest.TestCase):
         Test do_modules(self, line, cacheonly=False)
         """
         sfcli = SpiderFootCli()
-        sfcli.do_modules(None, None)
+        with patch.object(sfcli, 'request', return_value='[]') as request:
+            sfcli.do_modules(None, None)
+        request.assert_called_once_with(sfcli.ownopts['cli.server_baseurl'] + '/modules')
 
         self.assertEqual('TBD', 'TBD')
 
@@ -378,7 +406,9 @@ class TestSpiderFootCli(unittest.TestCase):
         Test do_types(self, line, cacheonly=False)
         """
         sfcli = SpiderFootCli()
-        sfcli.do_types(None, None)
+        with patch.object(sfcli, 'request', return_value='[]') as request:
+            sfcli.do_types(None, None)
+        request.assert_called_once_with(sfcli.ownopts['cli.server_baseurl'] + '/eventtypes')
 
         self.assertEqual('TBD', 'TBD')
 

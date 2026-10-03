@@ -39,7 +39,10 @@ COPYRIGHT_INFO = "               by Steve Micallef | @spiderfoot\n"
 try:
     import readline
 except ImportError:
-    import pyreadline as readline
+    try:
+        import pyreadline as readline
+    except ImportError:
+        readline = None
 
 
 # Colors to make things purty
@@ -77,6 +80,14 @@ class SpiderFootCli(cmd.Cmd):
         "cli.password": "",
         "cli.server_baseurl": "http://127.0.0.1:5001"
     }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ownopts = self.ownopts.copy()
+        self.modules = self.modules.copy()
+        self.types = self.types.copy()
+        self.correlationrules = self.correlationrules.copy()
+        self.knownscans = self.knownscans.copy()
 
     def default(self, line):
         if line.startswith('#'):
@@ -188,10 +199,19 @@ class SpiderFootCli(cmd.Cmd):
         c = self.myparseline(line)
 
         if '-l' in c[0]:
-            i = 0
-            while i < readline.get_current_history_length():
-                self.dprint(readline.get_history_item(i), plain=True)
-                i += 1
+            if readline is None:
+                history_file = self.ownopts.get('cli.history_file')
+                try:
+                    with codecs.open(history_file, 'r', encoding='utf-8') as fp:
+                        for entry in fp:
+                            self.dprint(entry.rstrip('\r\n'), plain=True)
+                except (OSError, TypeError):
+                    self.edprint('No command history is available.')
+            else:
+                i = 0
+                while i < readline.get_current_history_length():
+                    self.dprint(readline.get_history_item(i), plain=True)
+                    i += 1
             return None
 
         if self.ownopts['cli.history']:
@@ -1436,7 +1456,7 @@ if __name__ == "__main__":
     # Test connectivity to the server
     s.do_ping("")
 
-    if not args.n:
+    if not args.n and readline is not None:
         try:
             f = codecs.open(s.ownopts['cli.history_file'], "r", encoding="utf-8")
             for line in f.readlines():
