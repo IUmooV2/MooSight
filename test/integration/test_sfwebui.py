@@ -69,6 +69,13 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
         self.getPage("/static/img/spiderfoot-header.png")
         self.assertStatus('200 OK')
 
+    def test_moosight_wordmark_styles_are_served_for_both_themes(self):
+        for stylesheet in ("spiderfoot.css", "dark.css"):
+            with self.subTest(stylesheet=stylesheet):
+                self.getPage(f"/static/css/{stylesheet}")
+                self.assertStatus('200 OK')
+                self.assertInBody('moosight-wordmark')
+
     def test_scaneventresultexport_invalid_scan_id_returns_200(self):
         self.getPage("/scaneventresultexport?id=doesnotexist&type=doesnotexist")
         self.assertStatus('200 OK')
@@ -121,6 +128,23 @@ class TestSpiderFootWebUiRoutes(helper.CPWebCase):
     def test_index_returns_200(self):
         self.getPage("/")
         self.assertStatus('200 OK')
+
+    def test_home_page_uses_moosight_branding(self):
+        self.getPage("/")
+        self.assertStatus('200 OK')
+        page = self.body.decode('utf-8', errors='replace')
+        self.assertIn('<title>MooSight v', page)
+        self.assertIn('aria-label="MooSight home"', page)
+        self.assertIn('MooSight · Open-source OSINT research', page)
+        self.assertNotIn('/static/img/spiderfoot-header.png', page)
+
+    def test_newscan_documents_bare_usernames_and_profile_urls(self):
+        self.getPage("/newscan")
+        self.assertStatus('200 OK')
+        page = self.body.decode('utf-8', errors='replace')
+        self.assertIn('MooSight will detect its type automatically', page)
+        self.assertIn('sonrie.99', page)
+        self.assertIn('Instagram profile URL (no quotes needed)', page)
 
     def test_scaninfo_invalid_scan_returns_200(self):
         self.getPage("/scaninfo?id=doesnotexist")

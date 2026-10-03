@@ -22,6 +22,10 @@ body .navbar-default a {
   color: #fff;
 }
 
+body .navbar-default .navbar-brand.moosight-wordmark {
+  color: #fff;
+}
+
 .navbar-default .navbar-nav > li > a {
   color: #fff !important;
 }
